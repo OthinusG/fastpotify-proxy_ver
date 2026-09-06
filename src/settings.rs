@@ -51,6 +51,10 @@ impl ThemeChoice {
 pub struct Settings {
     /// The Spotify Connect name other devices see.
     pub device_name: String,
+    /// HTTP proxy hostname or IP address. `proxy_port` must also be set.
+    pub proxy_server: Option<String>,
+    /// HTTP proxy port. `proxy_server` must also be set.
+    pub proxy_port: Option<u16>,
     /// 96, 160, or 320 kbps.
     pub bitrate: u16,
     pub normalisation: bool,
@@ -157,6 +161,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             device_name: "Fastpotify".to_string(),
+            proxy_server: None,
+            proxy_port: None,
             bitrate: 320,
             normalisation: false,
             autoplay: true,
@@ -257,6 +263,35 @@ impl Settings {
         })
     }
 
+    /// Returns the proxy URL shared by HTTP requests and local playback.
+    pub fn proxy_url(&self) -> Result<Option<String>, &'static str> {
+        let server = self
+            .proxy_server
+            .as_deref()
+            .map(str::trim)
+            .filter(|server| !server.is_empty());
+        let (server, port) = match (server, self.proxy_port) {
+            (None, None) => return Ok(None),
+            (Some(server), Some(port)) if port != 0 => (server, port),
+            _ => return Err("proxy_server and a non-zero proxy_port must be set together"),
+        };
+        if server.contains(|character: char| {
+            character.is_whitespace() || matches!(character, '/' | '@' | '?' | '#')
+        }) {
+            return Err(
+                "proxy_server must be a hostname or IP address without credentials or a path",
+            );
+        }
+        let host = if server.parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("[{server}]")
+        } else if server.contains(':') {
+            return Err("proxy_server must not include a scheme or port");
+        } else {
+            server.to_string()
+        };
+        Ok(Some(format!("http://{host}:{port}")))
+    }
+
     pub fn remember_search(&mut self, query: &str) {
         let query = query.trim();
         if query.is_empty() {
@@ -276,6 +311,53 @@ mod tests {
     fn older_settings_keep_the_sidebar_visible() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.sidebar_visible);
+        assert_eq!(settings.proxy_url(), Ok(None));
+    }
+
+    #[test]
+    fn proxy_host_and_port_form_one_http_proxy_url() {
+        let settings = Settings {
+            proxy_server: Some(" 127.0.0.1 ".into()),
+            proxy_port: Some(7890),
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings.proxy_url(),
+            Ok(Some("http://127.0.0.1:7890".into()))
+        );
+
+        let ipv6 = Settings {
+            proxy_server: Some("::1".into()),
+            proxy_port: Some(8080),
+            ..Settings::default()
+        };
+        assert_eq!(ipv6.proxy_url(), Ok(Some("http://[::1]:8080".into())));
+    }
+
+    #[test]
+    fn incomplete_or_unsafe_proxy_settings_are_rejected() {
+        for settings in [
+            Settings {
+                proxy_server: Some("localhost".into()),
+                ..Settings::default()
+            },
+            Settings {
+                proxy_port: Some(7890),
+                ..Settings::default()
+            },
+            Settings {
+                proxy_server: Some("http://localhost".into()),
+                proxy_port: Some(7890),
+                ..Settings::default()
+            },
+            Settings {
+                proxy_server: Some("user@localhost".into()),
+                proxy_port: Some(7890),
+                ..Settings::default()
+            },
+        ] {
+            assert!(settings.proxy_url().is_err());
+        }
     }
 
     #[test]

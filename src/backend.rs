@@ -628,11 +628,13 @@ impl Backend {
             .enable_all()
             .build()
             .expect("unable to start the async runtime");
-        let http = reqwest::Client::builder()
+        let mut http = reqwest::Client::builder()
             .user_agent(concat!("fastpotify/", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("unable to build the HTTP client");
+            .timeout(Duration::from_secs(30));
+        if let Some(proxy) = engine_config.proxy.as_deref() {
+            http = http.proxy(reqwest::Proxy::all(proxy).expect("validated proxy URL"));
+        }
+        let http = http.build().expect("unable to build the HTTP client");
         let art = ArtLoader::new(http.clone(), runtime.handle().clone(), dirs.art_cache_dir());
         let activity = Arc::new(NetActivity::default());
 

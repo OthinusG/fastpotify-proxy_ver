@@ -5973,7 +5973,11 @@ impl App {
                     if self.winamp.presets.count() == 0
                         && self.winamp.presets.downloading().is_none()
                     {
-                        self.winamp.presets.download_missing(folder, ctx.clone());
+                        self.winamp.presets.download_missing(
+                            folder,
+                            self.settings.proxy_url().expect("invalid proxy settings"),
+                            ctx.clone(),
+                        );
                         self.toast("Downloading MilkDrop preset packs");
                     }
                 }
@@ -6000,9 +6004,12 @@ impl App {
             Action::OpenMilkdropFolder => self.open_folder(self.dirs.milkdrop_dir()),
             Action::DownloadMilkdropPack(index) => {
                 if let Some(pack) = crate::milkdrop::PACKS.get(index) {
-                    self.winamp
-                        .presets
-                        .download(pack, self.dirs.milkdrop_dir(), ctx.clone());
+                    self.winamp.presets.download(
+                        pack,
+                        self.dirs.milkdrop_dir(),
+                        self.settings.proxy_url().expect("invalid proxy settings"),
+                        ctx.clone(),
+                    );
                     self.toast(format!("Downloading {} presets", pack.name));
                 }
             }
@@ -6529,6 +6536,7 @@ pub fn engine_config(
         tap,
         eq,
         device_name: settings.device_name.trim().to_string(),
+        proxy: settings.proxy_url().expect("invalid proxy settings"),
         bitrate_kbps: settings.bitrate,
         normalisation: settings.normalisation,
         autoplay: settings.autoplay,

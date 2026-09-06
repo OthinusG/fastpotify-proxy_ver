@@ -39,6 +39,7 @@ use crate::vis::{AudioTap, Tapped};
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub device_name: String,
+    pub proxy: Option<String>,
     pub bitrate_kbps: u16,
     pub normalisation: bool,
     pub autoplay: bool,
@@ -286,6 +287,10 @@ impl Engine {
         let session_config = SessionConfig {
             device_id: device_id.clone(),
             autoplay: Some(config.autoplay),
+            proxy: config
+                .proxy
+                .as_ref()
+                .map(|proxy| proxy.parse().expect("validated proxy URL")),
             ..SessionConfig::default()
         };
         let normalisation_factor = Arc::new(std::sync::atomic::AtomicU64::new(1.0f64.to_bits()));
@@ -1155,6 +1160,7 @@ mod tests {
             tap: AudioTap::new(),
             eq: crate::eq::shared(),
             device_name: "Fastpotify".into(),
+            proxy: None,
             bitrate_kbps: 320,
             normalisation: false,
             autoplay: true,

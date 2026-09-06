@@ -275,6 +275,7 @@ fn format_devices(snapshot: &str) -> String {
 }
 
 fn main() -> eframe::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     // A MilkDrop child launch is a bare visualiser window, not the app: it has
     // its own event loop and OpenGL context, reads the sound from a shared
     // buffer, and never touches the app's state. Handle it before anything
@@ -325,6 +326,11 @@ fn main() -> eframe::Result<()> {
     }
     log_panics(dirs.panic_log());
     let mut settings = settings::Settings::load(&dirs.settings_file());
+    if let Err(error) = settings.proxy_url() {
+        log::error!("invalid proxy settings: {error}");
+        eprintln!("invalid proxy settings: {error}");
+        std::process::exit(2);
+    }
     if let Some(name) = cli.device_name {
         settings.device_name = name;
     }

@@ -63,15 +63,10 @@ raw-window-handle = { version = "0.6", optional = true }
 # Spotify playback and Connect. rustls everywhere so the client links one TLS
 # stack and builds without OpenSSL on every platform.
 #
-# librespot-core depends on hyper-proxy2 for HTTP proxy support, whose only
-# published release (0.1.0) pins rustls 0.22 and so drags in rustls-webpki
-# 0.102, which carries advisories against its CRL and name-constraint
-# handling. Fastpotify never configures a proxy (SessionConfig.proxy stays
-# None), so that TLS client is compiled in but never used to verify anything.
-# Every connection this app actually makes (the Web API through reqwest, and
-# librespot's own sessions) goes through rustls 0.23 with a patched
-# rustls-webpki. Removing the old copy needs a release of hyper-proxy2, or a
-# librespot that stops depending on it.
+# librespot-core depends on hyper-proxy2 for HTTP proxy support. Its published
+# 0.1.0 release pins rustls 0.22 and rustls-webpki 0.102, which carry known
+# certificate-validation advisories. The patch below pins the maintenance
+# commit that moved its CONNECT tunnel to rustls 0.23.
 librespot-core = { version = "0.8", default-features = false, features = ["rustls-tls-native-roots"] }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend", "rustls-tls-native-roots"] }
 librespot-connect = { version = "0.8", default-features = false }
@@ -86,6 +81,9 @@ protobuf = "3"
 rodio = { version = "0.21", default-features = false, features = ["playback"] }
 cpal = "0.16"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "http2", "blocking"] }
+# The patched hyper-proxy2 currently enables both rustls providers through
+# hyper-rustls. Pick the ring provider explicitly at process startup.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # `fs` is used by the playlist cache in `backend.rs`. On Linux the
 # mpris-server dependency happens to turn it on, which is why leaving it out
 # built there and nowhere else.
@@ -172,6 +170,7 @@ opt-level = 0
 # explicit CMAKE_GENERATOR win. Drop when upstream takes the change.
 [patch.crates-io]
 projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect-cmake-generator" }
+hyper-proxy2 = { git = "https://github.com/siketyan/hyper-proxy2", rev = "2a1a9845f4c9a100c45bf3dc0f1222773d5a33b7" }
 # librespot 0.8.0 plus the small patches Fastpotify needs: queue controls,
 # normalisation-factor reporting for the visualisers, and a distinct event
 # when Spotify refuses an audio key, and a connection deadline that includes

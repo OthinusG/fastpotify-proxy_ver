@@ -68,6 +68,8 @@ main fields are:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `device_name` | `Fastpotify` | Name on Spotify Connect |
+| `proxy_server` | none | HTTP proxy hostname or IP address, without scheme or credentials |
+| `proxy_port` | none | HTTP proxy port; must be set with `proxy_server` |
 | `bitrate` | `320` | 96, 160, or 320 kbps |
 | `normalisation` | `false` | Volume normalisation |
 | `autoplay` | `true` | Keep playing similar music at the end |
@@ -103,6 +105,12 @@ main fields are:
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
 | `web_client_id` | none | Optional personal Spotify app id used alongside shared coverage |
 | `personal_app_nudge_at` | none | Last slow-Spotify personal-app reminder, so it appears at most once a day |
+
+When both proxy fields are set, Fastpotify routes its Internet HTTP requests
+and local Spotify playback through that proxy. Local-network receiver
+discovery and activation stay direct. Restart the app after changing either
+field. Invalid or partial proxy settings stop startup instead of silently
+falling back to a direct connection.
 
 ## Command line
 

@@ -270,6 +270,10 @@ on Linux). They include the Connect device name, bitrate, normalisation,
 autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
 from artwork, and the mini player's skin and size.
+Set `proxy_server` and `proxy_port` together to route Internet traffic and
+local playback through an HTTP proxy. The server is a hostname or IP address,
+without a scheme or credentials. Restart Fastpotify after editing either
+field. Local-network receiver discovery remains direct.
 Playback settings apply when you press **Apply and restart playback**.
 You can also check for a new release from Settings. On macOS, the same command
 is in the application menu.

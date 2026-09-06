@@ -230,7 +230,13 @@ impl Presets {
     }
 
     /// Downloads one preset pack on a worker thread.
-    pub fn download(&mut self, pack: &'static Pack, folder: PathBuf, ctx: egui::Context) {
+    pub fn download(
+        &mut self,
+        pack: &'static Pack,
+        folder: PathBuf,
+        proxy: Option<String>,
+        ctx: egui::Context,
+    ) {
         if self.download.is_some() {
             return;
         }
@@ -238,7 +244,7 @@ impl Presets {
         let spawned = std::thread::Builder::new()
             .name("milkdrop-presets".into())
             .spawn(move || {
-                let _ = sender.send(fetch_pack(pack, &folder));
+                let _ = sender.send(fetch_pack(pack, &folder, proxy.as_deref()));
                 ctx.request_repaint();
             });
         match spawned {
@@ -249,7 +255,7 @@ impl Presets {
 
     /// Fetches every pack in one go, for a first open with nothing
     /// there; failures after the first pack still land what arrived.
-    pub fn download_missing(&mut self, folder: PathBuf, ctx: egui::Context) {
+    pub fn download_missing(&mut self, folder: PathBuf, proxy: Option<String>, ctx: egui::Context) {
         if self.download.is_some() {
             return;
         }
@@ -260,7 +266,7 @@ impl Presets {
                 let mut total = 0usize;
                 let mut failed = None;
                 for pack in &PACKS {
-                    match fetch_pack(pack, &folder) {
+                    match fetch_pack(pack, &folder, proxy.as_deref()) {
                         Ok(count) => total += count,
                         Err(error) => {
                             failed = Some(error);
@@ -339,12 +345,14 @@ pub fn is_preset(path: &Path) -> bool {
 /// Downloads a pack and unpacks its presets into the folder, flat, since
 /// the packs keep theirs in folders by style and the names do not clash.
 /// Returns how many were written.
-pub fn fetch_pack(pack: &Pack, folder: &Path) -> Result<usize, String> {
-    let http = reqwest::blocking::Client::builder()
+pub fn fetch_pack(pack: &Pack, folder: &Path, proxy: Option<&str>) -> Result<usize, String> {
+    let mut http = reqwest::blocking::Client::builder()
         .user_agent(concat!("fastpotify/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|error| error.to_string())?;
+        .timeout(Duration::from_secs(300));
+    if let Some(proxy) = proxy {
+        http = http.proxy(reqwest::Proxy::all(proxy).map_err(|_| "invalid proxy settings")?);
+    }
+    let http = http.build().map_err(|error| error.to_string())?;
     let bytes = http
         .get(pack.url)
         .send()

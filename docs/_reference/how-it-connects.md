@@ -93,6 +93,10 @@ connects over TCP in the resolver's preference order: port 4070 first,
 falling back to 443 and 80. Only outbound connections are needed; no
 inbound ports have to be open.
 
+When `proxy_server` and `proxy_port` are set in `settings.json`, Internet HTTP
+requests and the librespot session use that HTTP proxy. Receiver discovery
+and activation on the local network remain direct.
+
 Each access-point attempt gives socket setup and the handshake a combined
 five seconds. A stalled TCP connection or HTTP proxy tunnel therefore lets
 librespot retry and move on to another endpoint instead of waiting for the

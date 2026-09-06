@@ -1,0 +1,112 @@
+name: Sync upstream and release macOS
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-macos
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: crmne/fastpotify
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.sync.outputs.release }}
+      tag: ${{ steps.sync.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        id: sync
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch upstream main
+
+          upstream_sha="$(git rev-parse upstream/main)"
+          tag="proxy-${upstream_sha:0:12}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git merge-base --is-ancestor upstream/main HEAD; then
+            git merge --no-edit upstream/main
+          fi
+          git tag "$tag"
+          git push --atomic origin HEAD:main "refs/tags/$tag"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: sync
+    if: needs.sync.outputs.release == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: proxy-macos-universal
+
+      - name: Build universal app
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p universal
+          lipo -create \
+            target/aarch64-apple-darwin/release/fastpotify \
+            target/x86_64-apple-darwin/release/fastpotify \
+            -output universal/fastpotify
+          version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+          bash packaging/macos/bundle.sh \
+            universal/fastpotify Fastpotify.app "$version"
+
+      - name: Package DMG
+        run: |
+          set -euo pipefail
+          name="fastpotify-${{ needs.sync.outputs.tag }}-macos-universal"
+          stage="$RUNNER_TEMP/dmg"
+          mkdir -p "$stage" dist
+          cp -R Fastpotify.app "$stage/"
+          cp README.md LICENSE "$stage/"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -volname Fastpotify -srcfolder "$stage" -ov \
+            -format UDZO "dist/$name.dmg"
+          shasum -a 256 dist/*.dmg > dist/checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.sync.outputs.tag }}
+          name: Fastpotify proxy build ${{ needs.sync.outputs.tag }}
+          body: Automatic macOS build of the latest upstream main with HTTP proxy support.
+          files: |
+            dist/*.dmg
+            dist/checksums.txt
