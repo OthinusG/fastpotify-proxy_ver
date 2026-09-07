@@ -307,6 +307,11 @@ PNG and exits, which is useful for reproducible interface screenshots.
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
 request. It covers project scope and required checks.
 
+Issues and discussions receive automated triage, including reassessment after
+new or edited comments. A rocket on the report or comment means its assessment
+completed successfully; it does not promise a reply or a fix. See
+[automated triage](CONTRIBUTING.md#automated-triage) for details.
+
 ## Acknowledgements
 
 Fastpotify uses [librespot](https://github.com/librespot-org/librespot),
