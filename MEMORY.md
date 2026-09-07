@@ -17,3 +17,4 @@
 - 2026-09-06: Proxy-enabled librespot must use the pinned `hyper-proxy2` maintenance commit with rustls 0.23. The published 0.1.0 release routes CONNECT TLS through rustls-webpki 0.102, which has known certificate-validation advisories. Select rustls's ring provider explicitly because the maintenance commit also enables AWS-LC through `hyper-rustls` defaults.
 - 2026-09-06: `.github/workflows/sync-upstream-macos.yml` polls upstream hourly, merges without force-pushing, and releases one ad-hoc-signed universal macOS DMG per detected upstream tip. Merge conflicts require manual resolution.
 - 2026-09-07: macOS Actions must explicitly add both Rust targets after toolchain setup because the repository-pinned toolchain, not only the action's requested toolchain, needs the target standard libraries.
+- 2026-09-07: Any Cargo dependency change must refresh the fixed-output `fetchCargoVendor` hash in `flake.nix`.
