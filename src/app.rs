@@ -6235,6 +6235,26 @@ impl App {
                     self.mark_settings_dirty();
                 }
             }
+            Action::ArrangeLibrary {
+                pinned,
+                playlist_order,
+            } => {
+                self.settings.liked_songs_pinned = pinned
+                    .iter()
+                    .any(|key| key == crate::settings::LIKED_SONGS_KEY);
+                self.settings.pinned_contexts = pinned;
+                if let Some(order) = playlist_order {
+                    self.settings.sidebar_order = order;
+                    self.settings.library_sort.insert(
+                        crate::settings::LibraryShelf::Playlists,
+                        crate::settings::LibrarySort::Local,
+                    );
+                }
+                self.settings
+                    .sidebar_order
+                    .retain(|key| !self.settings.pinned_contexts.contains(key));
+                self.mark_settings_dirty();
+            }
             Action::SettingsChanged => {
                 self.settings_dirty = true;
                 ctx.set_theme(match self.settings.theme {

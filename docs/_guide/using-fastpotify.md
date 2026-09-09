@@ -79,6 +79,18 @@ select a sort. Explicit sorts load the remaining pages of the selected section
 in the background. A failed page stops that loading; choosing the order again
 retries it.
 
+Liked Songs starts pinned at the top. Drag it between pins to choose its
+position, or below the pin block to unpin it and put it in **Local custom
+order**. Other pins can sit above it. Its right-click menu also offers **Unpin**
+and **Pin to top**; pinning adds it after your existing pins. The arrangement
+survives restarting Fastpotify and switching sort choices.
+
+When unpinned, Liked Songs follows **Name** or **Recently played** like the other
+rows. In **Spotify custom order**, it appears after the playlists because it
+has no place in Spotify's playlist tree. Returning to **Local custom order**
+restores its saved position. Dragging a song onto Liked Songs still saves that
+song, wherever the row sits.
+
 ## Recent
 
 The queue panel's second tab combines Spotify's history with tracks played

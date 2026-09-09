@@ -4,6 +4,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// Local Library identity only. Never sent to Spotify as a context URI.
+pub const LIKED_SONGS_KEY: &str = "fastpotify:liked-songs";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LibraryShelf {
@@ -129,8 +132,10 @@ pub struct Settings {
     pub keep_playing_in_background: bool,
     /// Ask GitHub once a day whether a newer release exists.
     pub check_for_updates: bool,
-    /// Context URIs pinned to the top of the sidebar, in pin order.
+    /// Context URIs and the local Liked Songs key, in pin order.
     pub pinned_contexts: Vec<String>,
+    /// Older settings keep Liked Songs first until it is moved or unpinned.
+    pub liked_songs_pinned: bool,
     /// The sidebar's own playlist order, set by dragging rows. Kept while
     /// another sort is selected; empty means no saved local arrangement.
     pub sidebar_order: Vec<String>,
@@ -221,6 +226,7 @@ impl Default for Settings {
             keep_playing_in_background: true,
             check_for_updates: true,
             pinned_contexts: Vec::new(),
+            liked_songs_pinned: true,
             sidebar_order: Vec::new(),
             library_sort: std::collections::BTreeMap::new(),
             zoom: 1.0,
@@ -256,6 +262,16 @@ fn default_buffer_ms() -> u32 {
 }
 
 impl Settings {
+    pub fn library_pins(&self) -> Vec<String> {
+        let mut pins = self.pinned_contexts.clone();
+        if !self.liked_songs_pinned {
+            pins.retain(|key| key != LIKED_SONGS_KEY);
+        } else if !pins.iter().any(|key| key == LIKED_SONGS_KEY) {
+            pins.insert(0, LIKED_SONGS_KEY.into());
+        }
+        pins
+    }
+
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
@@ -314,6 +330,19 @@ mod tests {
     fn older_settings_keep_the_sidebar_visible() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.sidebar_visible);
+    }
+
+    #[test]
+    fn older_library_settings_keep_liked_songs_ahead_of_existing_pins() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"pinned_contexts":["spotify:playlist:one"],"sidebar_order":["spotify:playlist:two"]}"#,
+        ).unwrap();
+        assert!(settings.liked_songs_pinned);
+        assert_eq!(
+            settings.library_pins(),
+            [super::LIKED_SONGS_KEY, "spotify:playlist:one"]
+        );
+        assert_eq!(settings.sidebar_order, ["spotify:playlist:two"]);
     }
 
     #[test]

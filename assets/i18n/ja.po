@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Fastpotify\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/fastpotify/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-09-09 15:48+0200\n"
+"POT-Creation-Date: 2026-09-09 16:31+0200\n"
 "PO-Revision-Date: 2026-09-09 13:30+0000\n"
 "Last-Translator: Fastpotify contributors\n"
 "Language-Team: Japanese\n"
@@ -16,87 +16,87 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: src/ui/sidebar.rs:60
-msgid "Library order"
-msgstr "ライブラリ順"
-
-#: src/ui/sidebar.rs:63
-msgid "Recently played"
-msgstr "最近再生した順"
-
-#: src/ui/sidebar.rs:65
-msgid "Name"
-msgstr "名前順"
-
-#: src/ui/sidebar.rs:68
-msgid "Recently added"
-msgstr "最近追加した順"
-
-#: src/ui/sidebar.rs:70
-msgid "Local custom order"
-msgstr "ローカルのカスタム順"
-
-#: src/ui/sidebar.rs:73
-msgid "Spotify custom order"
-msgstr "Spotifyのカスタム順"
-
-#: src/ui/sidebar.rs:472 src/i18n.rs:102 src/i18n.rs:105
-msgid "Home"
-msgstr "ホーム"
-
-#: src/ui/sidebar.rs:483
-msgid "Search"
-msgstr "検索"
-
-#: src/ui/sidebar.rs:515
-msgid "Library"
-msgstr "ライブラリ"
-
-#: src/ui/sidebar.rs:528
-msgid "Hide sidebar (Ctrl+B)"
-msgstr "サイドバーを非表示 (Ctrl+B)"
-
-#: src/ui/sidebar.rs:529
-msgid "Hide sidebar (Cmd+B)"
-msgstr "サイドバーを非表示 (Cmd+B)"
-
-#: src/ui/sidebar.rs:543
-msgid "Create a playlist"
-msgstr "プレイリストを作成"
-
-#: src/ui/sidebar.rs:559
-msgid "Search Your Library"
-msgstr "ライブラリを検索"
-
-#: src/ui/sidebar.rs:577
-msgid "Playlists"
-msgstr "プレイリスト"
-
-#: src/ui/sidebar.rs:578
-msgid "Albums"
-msgstr "アルバム"
-
-#: src/ui/sidebar.rs:579
-msgid "Artists"
-msgstr "アーティスト"
-
-#: src/ui/sidebar.rs:580
-msgid "Podcasts"
-msgstr "ポッドキャスト"
-
-#: src/ui/sidebar.rs:600
-msgid "Search in Your Library"
-msgstr "ライブラリ内を検索"
-
-#: src/ui/sidebar.rs:649
+#: src/ui/sidebar.rs:49
 msgid "Liked Songs"
 msgstr "お気に入りの曲"
 
-#: src/ui/sidebar.rs:656
+#: src/ui/sidebar.rs:52
 msgid "Playlist"
 msgstr "プレイリスト"
 
-#: src/ui/sidebar.rs:751
+#: src/ui/sidebar.rs:91
+msgid "Library order"
+msgstr "ライブラリ順"
+
+#: src/ui/sidebar.rs:94
+msgid "Recently played"
+msgstr "最近再生した順"
+
+#: src/ui/sidebar.rs:96
+msgid "Name"
+msgstr "名前順"
+
+#: src/ui/sidebar.rs:99
+msgid "Recently added"
+msgstr "最近追加した順"
+
+#: src/ui/sidebar.rs:101
+msgid "Local custom order"
+msgstr "ローカルのカスタム順"
+
+#: src/ui/sidebar.rs:104
+msgid "Spotify custom order"
+msgstr "Spotifyのカスタム順"
+
+#: src/ui/sidebar.rs:503 src/i18n.rs:102 src/i18n.rs:105
+msgid "Home"
+msgstr "ホーム"
+
+#: src/ui/sidebar.rs:514
+msgid "Search"
+msgstr "検索"
+
+#: src/ui/sidebar.rs:546
+msgid "Library"
+msgstr "ライブラリ"
+
+#: src/ui/sidebar.rs:559
+msgid "Hide sidebar (Ctrl+B)"
+msgstr "サイドバーを非表示 (Ctrl+B)"
+
+#: src/ui/sidebar.rs:560
+msgid "Hide sidebar (Cmd+B)"
+msgstr "サイドバーを非表示 (Cmd+B)"
+
+#: src/ui/sidebar.rs:574
+msgid "Create a playlist"
+msgstr "プレイリストを作成"
+
+#: src/ui/sidebar.rs:590
+msgid "Search Your Library"
+msgstr "ライブラリを検索"
+
+#: src/ui/sidebar.rs:608
+msgid "Playlists"
+msgstr "プレイリスト"
+
+#: src/ui/sidebar.rs:609
+msgid "Albums"
+msgstr "アルバム"
+
+#: src/ui/sidebar.rs:610
+msgid "Artists"
+msgstr "アーティスト"
+
+#: src/ui/sidebar.rs:611
+msgid "Podcasts"
+msgstr "ポッドキャスト"
+
+#: src/ui/sidebar.rs:631
+msgid "Search in Your Library"
+msgstr "ライブラリ内を検索"
+
+#: src/ui/sidebar.rs:765
 msgid "Artist"
 msgstr "アーティスト"
 

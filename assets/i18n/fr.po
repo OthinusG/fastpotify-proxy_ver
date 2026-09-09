@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Fastpotify\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/fastpotify/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-09-09 15:48+0200\n"
+"POT-Creation-Date: 2026-09-09 16:31+0200\n"
 "PO-Revision-Date: 2026-09-09 13:30+0000\n"
 "Last-Translator: Fastpotify contributors\n"
 "Language-Team: French\n"
@@ -16,87 +16,87 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
-#: src/ui/sidebar.rs:60
-msgid "Library order"
-msgstr "Ordre de la bibliothèque"
-
-#: src/ui/sidebar.rs:63
-msgid "Recently played"
-msgstr "Écoutés récemment"
-
-#: src/ui/sidebar.rs:65
-msgid "Name"
-msgstr "Nom"
-
-#: src/ui/sidebar.rs:68
-msgid "Recently added"
-msgstr "Ajoutés récemment"
-
-#: src/ui/sidebar.rs:70
-msgid "Local custom order"
-msgstr "Ordre personnalisé local"
-
-#: src/ui/sidebar.rs:73
-msgid "Spotify custom order"
-msgstr "Ordre personnalisé Spotify"
-
-#: src/ui/sidebar.rs:472 src/i18n.rs:102 src/i18n.rs:105
-msgid "Home"
-msgstr "Accueil"
-
-#: src/ui/sidebar.rs:483
-msgid "Search"
-msgstr "Rechercher"
-
-#: src/ui/sidebar.rs:515
-msgid "Library"
-msgstr "Bibliothèque"
-
-#: src/ui/sidebar.rs:528
-msgid "Hide sidebar (Ctrl+B)"
-msgstr "Masquer la barre latérale (Ctrl+B)"
-
-#: src/ui/sidebar.rs:529
-msgid "Hide sidebar (Cmd+B)"
-msgstr "Masquer la barre latérale (Cmd+B)"
-
-#: src/ui/sidebar.rs:543
-msgid "Create a playlist"
-msgstr "Créer une playlist"
-
-#: src/ui/sidebar.rs:559
-msgid "Search Your Library"
-msgstr "Rechercher dans la bibliothèque"
-
-#: src/ui/sidebar.rs:577
-msgid "Playlists"
-msgstr "Playlists"
-
-#: src/ui/sidebar.rs:578
-msgid "Albums"
-msgstr "Albums"
-
-#: src/ui/sidebar.rs:579
-msgid "Artists"
-msgstr "Artistes"
-
-#: src/ui/sidebar.rs:580
-msgid "Podcasts"
-msgstr "Podcasts"
-
-#: src/ui/sidebar.rs:600
-msgid "Search in Your Library"
-msgstr "Rechercher dans votre bibliothèque"
-
-#: src/ui/sidebar.rs:649
+#: src/ui/sidebar.rs:49
 msgid "Liked Songs"
 msgstr "Titres likés"
 
-#: src/ui/sidebar.rs:656
+#: src/ui/sidebar.rs:52
 msgid "Playlist"
 msgstr "Playlist"
 
-#: src/ui/sidebar.rs:751
+#: src/ui/sidebar.rs:91
+msgid "Library order"
+msgstr "Ordre de la bibliothèque"
+
+#: src/ui/sidebar.rs:94
+msgid "Recently played"
+msgstr "Écoutés récemment"
+
+#: src/ui/sidebar.rs:96
+msgid "Name"
+msgstr "Nom"
+
+#: src/ui/sidebar.rs:99
+msgid "Recently added"
+msgstr "Ajoutés récemment"
+
+#: src/ui/sidebar.rs:101
+msgid "Local custom order"
+msgstr "Ordre personnalisé local"
+
+#: src/ui/sidebar.rs:104
+msgid "Spotify custom order"
+msgstr "Ordre personnalisé Spotify"
+
+#: src/ui/sidebar.rs:503 src/i18n.rs:102 src/i18n.rs:105
+msgid "Home"
+msgstr "Accueil"
+
+#: src/ui/sidebar.rs:514
+msgid "Search"
+msgstr "Rechercher"
+
+#: src/ui/sidebar.rs:546
+msgid "Library"
+msgstr "Bibliothèque"
+
+#: src/ui/sidebar.rs:559
+msgid "Hide sidebar (Ctrl+B)"
+msgstr "Masquer la barre latérale (Ctrl+B)"
+
+#: src/ui/sidebar.rs:560
+msgid "Hide sidebar (Cmd+B)"
+msgstr "Masquer la barre latérale (Cmd+B)"
+
+#: src/ui/sidebar.rs:574
+msgid "Create a playlist"
+msgstr "Créer une playlist"
+
+#: src/ui/sidebar.rs:590
+msgid "Search Your Library"
+msgstr "Rechercher dans la bibliothèque"
+
+#: src/ui/sidebar.rs:608
+msgid "Playlists"
+msgstr "Playlists"
+
+#: src/ui/sidebar.rs:609
+msgid "Albums"
+msgstr "Albums"
+
+#: src/ui/sidebar.rs:610
+msgid "Artists"
+msgstr "Artistes"
+
+#: src/ui/sidebar.rs:611
+msgid "Podcasts"
+msgstr "Podcasts"
+
+#: src/ui/sidebar.rs:631
+msgid "Search in Your Library"
+msgstr "Rechercher dans votre bibliothèque"
+
+#: src/ui/sidebar.rs:765
 msgid "Artist"
 msgstr "Artiste"
 

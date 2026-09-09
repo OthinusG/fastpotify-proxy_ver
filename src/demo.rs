@@ -3208,7 +3208,7 @@ mod tests {
         }
 
         // Sweep from the top: the first slot inside the list drops the
-        // dragged row right under Liked Songs. Where the list begins
+        // dragged row above Liked Songs. Where the list begins
         // depends on the loaded fonts, so the sweep does not hardcode it.
         let mut dropped = false;
         for step in 0..40 {
@@ -3245,6 +3245,7 @@ mod tests {
             app.settings.pinned_contexts,
             vec![
                 "spotify:playlist:pl4".to_string(),
+                crate::settings::LIKED_SONGS_KEY.to_string(),
                 "spotify:playlist:pl2".to_string(),
             ],
         );
@@ -3321,9 +3322,187 @@ mod tests {
             .map(|index| format!("spotify:playlist:pl{index}"))
             .collect();
         assert_eq!(app.settings.sidebar_order, expected);
-        assert!(app.settings.pinned_contexts.is_empty());
+        assert_eq!(
+            app.settings.library_pins(),
+            [crate::settings::LIKED_SONGS_KEY]
+        );
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dragging_liked_songs_moves_it_and_its_menu_can_pin_it_again() {
+        use crate::settings::LIKED_SONGS_KEY;
+        use egui::accesskit::Role;
+        for compact in [false, true] {
+            let (ctx, mut app) = accessible_app(&format!("liked-drag-{compact}"));
+            app.settings.sidebar_compact = compact;
+            app.rootlist.clear();
+            app.settings.pinned_contexts = vec!["spotify:playlist:pl2".into()];
+            app.settings.sidebar_order = (0..PLAYLISTS.len())
+                .filter(|index| *index != 2)
+                .map(|index| format!("spotify:playlist:pl{index}"))
+                .collect();
+            let row = |tree: &egui::accesskit::TreeUpdate, label: &str| {
+                let bounds = tree
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| {
+                        node.role() == Role::Button
+                            && node.label() == Some(label)
+                            && node.bounds().is_some_and(|bounds| bounds.x0 < 250.0)
+                    })
+                    .unwrap_or_else(|| panic!("missing sidebar row {label}"))
+                    .1
+                    .bounds()
+                    .unwrap();
+                egui::Rect::from_min_max(
+                    egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                    egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                )
+            };
+            accessible_frame(&ctx, &mut app, vec![]);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let source = row(&tree, "Liked Songs").center();
+            let target = row(&tree, "Late night focus");
+            let target = egui::pos2(source.x, target.top() + 1.0);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(source),
+                    egui::Event::PointerButton {
+                        pos: source,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerMoved(source + egui::vec2(12.0, 0.0))],
+            );
+            assert_eq!(
+                egui::DragAndDrop::payload::<DragEntry>(&ctx).unwrap().uri,
+                LIKED_SONGS_KEY
+            );
+            accessible_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(target)]);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(!app.settings.liked_songs_pinned);
+            assert_eq!(
+                &app.settings.sidebar_order[..3],
+                [
+                    "spotify:playlist:pl0",
+                    LIKED_SONGS_KEY,
+                    "spotify:playlist:pl1"
+                ]
+            );
+            let expected = app.settings.sidebar_order.clone();
+            let path = app.dirs.config.join("liked-placement.json");
+            app.settings.save(&path);
+            app.settings = Settings::load(&path);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            assert_eq!(app.settings.sidebar_order, expected);
+            assert!(row(&tree, "Discover Weekly").top() < row(&tree, "Liked Songs").top());
+            assert!(row(&tree, "Liked Songs").top() < row(&tree, "Late night focus").top());
+            let source = row(&tree, "Liked Songs").center();
+            accessible_frame(
+                &ctx,
+                &mut app,
+                pointer_click(source, egui::PointerButton::Secondary),
+            );
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let pin = accessible_node(&tree, "Pin to top", Role::Button);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![accessible_action(pin, egui::accesskit::Action::Click, None)],
+            );
+            assert_eq!(
+                app.settings.library_pins(),
+                ["spotify:playlist:pl2", LIKED_SONGS_KEY]
+            );
+            assert!(
+                !app.settings
+                    .sidebar_order
+                    .iter()
+                    .any(|key| key == LIKED_SONGS_KEY)
+            );
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let source = row(&tree, "Liked Songs").center();
+            accessible_frame(
+                &ctx,
+                &mut app,
+                pointer_click(source, egui::PointerButton::Secondary),
+            );
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let unpin = accessible_node(&tree, "Unpin", Role::Button);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![accessible_action(
+                    unpin,
+                    egui::accesskit::Action::Click,
+                    None,
+                )],
+            );
+            assert!(!app.settings.liked_songs_pinned);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let target = row(&tree, "Liked Songs").center();
+            app.saved.insert("spotify:track:trk0".into(), false);
+            let source = egui::pos2(40.0, 755.0);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(source),
+                    egui::Event::PointerButton {
+                        pos: source,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerMoved(source + egui::vec2(16.0, 0.0))],
+            );
+            assert_eq!(
+                egui::DragAndDrop::payload::<DragTrack>(&ctx).unwrap().uri,
+                "spotify:track:trk0"
+            );
+            accessible_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(target)]);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert_eq!(
+                app.is_saved("spotify:track:trk0"),
+                Some(true),
+                "dropping a song on the relocated row still saves it"
+            );
+            assert!(app.backend.take_playlist_add_requests().is_empty());
+            app.backend.shutdown();
+        }
     }
 
     #[test]

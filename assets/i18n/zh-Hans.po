@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Fastpotify\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/fastpotify/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-09-09 15:48+0200\n"
+"POT-Creation-Date: 2026-09-09 16:31+0200\n"
 "PO-Revision-Date: 2026-09-09 13:30+0000\n"
 "Last-Translator: Fastpotify contributors\n"
 "Language-Team: Simplified Chinese\n"
@@ -16,87 +16,87 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: src/ui/sidebar.rs:60
-msgid "Library order"
-msgstr "音乐库顺序"
-
-#: src/ui/sidebar.rs:63
-msgid "Recently played"
-msgstr "最近播放"
-
-#: src/ui/sidebar.rs:65
-msgid "Name"
-msgstr "名称"
-
-#: src/ui/sidebar.rs:68
-msgid "Recently added"
-msgstr "最近添加"
-
-#: src/ui/sidebar.rs:70
-msgid "Local custom order"
-msgstr "本地自定义顺序"
-
-#: src/ui/sidebar.rs:73
-msgid "Spotify custom order"
-msgstr "Spotify 自定义顺序"
-
-#: src/ui/sidebar.rs:472 src/i18n.rs:102 src/i18n.rs:105
-msgid "Home"
-msgstr "首页"
-
-#: src/ui/sidebar.rs:483
-msgid "Search"
-msgstr "搜索"
-
-#: src/ui/sidebar.rs:515
-msgid "Library"
-msgstr "音乐库"
-
-#: src/ui/sidebar.rs:528
-msgid "Hide sidebar (Ctrl+B)"
-msgstr "隐藏侧边栏 (Ctrl+B)"
-
-#: src/ui/sidebar.rs:529
-msgid "Hide sidebar (Cmd+B)"
-msgstr "隐藏侧边栏 (Cmd+B)"
-
-#: src/ui/sidebar.rs:543
-msgid "Create a playlist"
-msgstr "创建歌单"
-
-#: src/ui/sidebar.rs:559
-msgid "Search Your Library"
-msgstr "搜索音乐库"
-
-#: src/ui/sidebar.rs:577
-msgid "Playlists"
-msgstr "歌单"
-
-#: src/ui/sidebar.rs:578
-msgid "Albums"
-msgstr "专辑"
-
-#: src/ui/sidebar.rs:579
-msgid "Artists"
-msgstr "艺人"
-
-#: src/ui/sidebar.rs:580
-msgid "Podcasts"
-msgstr "播客"
-
-#: src/ui/sidebar.rs:600
-msgid "Search in Your Library"
-msgstr "在音乐库中搜索"
-
-#: src/ui/sidebar.rs:649
+#: src/ui/sidebar.rs:49
 msgid "Liked Songs"
 msgstr "喜欢的歌曲"
 
-#: src/ui/sidebar.rs:656
+#: src/ui/sidebar.rs:52
 msgid "Playlist"
 msgstr "歌单"
 
-#: src/ui/sidebar.rs:751
+#: src/ui/sidebar.rs:91
+msgid "Library order"
+msgstr "音乐库顺序"
+
+#: src/ui/sidebar.rs:94
+msgid "Recently played"
+msgstr "最近播放"
+
+#: src/ui/sidebar.rs:96
+msgid "Name"
+msgstr "名称"
+
+#: src/ui/sidebar.rs:99
+msgid "Recently added"
+msgstr "最近添加"
+
+#: src/ui/sidebar.rs:101
+msgid "Local custom order"
+msgstr "本地自定义顺序"
+
+#: src/ui/sidebar.rs:104
+msgid "Spotify custom order"
+msgstr "Spotify 自定义顺序"
+
+#: src/ui/sidebar.rs:503 src/i18n.rs:102 src/i18n.rs:105
+msgid "Home"
+msgstr "首页"
+
+#: src/ui/sidebar.rs:514
+msgid "Search"
+msgstr "搜索"
+
+#: src/ui/sidebar.rs:546
+msgid "Library"
+msgstr "音乐库"
+
+#: src/ui/sidebar.rs:559
+msgid "Hide sidebar (Ctrl+B)"
+msgstr "隐藏侧边栏 (Ctrl+B)"
+
+#: src/ui/sidebar.rs:560
+msgid "Hide sidebar (Cmd+B)"
+msgstr "隐藏侧边栏 (Cmd+B)"
+
+#: src/ui/sidebar.rs:574
+msgid "Create a playlist"
+msgstr "创建歌单"
+
+#: src/ui/sidebar.rs:590
+msgid "Search Your Library"
+msgstr "搜索音乐库"
+
+#: src/ui/sidebar.rs:608
+msgid "Playlists"
+msgstr "歌单"
+
+#: src/ui/sidebar.rs:609
+msgid "Albums"
+msgstr "专辑"
+
+#: src/ui/sidebar.rs:610
+msgid "Artists"
+msgstr "艺人"
+
+#: src/ui/sidebar.rs:611
+msgid "Podcasts"
+msgstr "播客"
+
+#: src/ui/sidebar.rs:631
+msgid "Search in Your Library"
+msgstr "在音乐库中搜索"
+
+#: src/ui/sidebar.rs:765
 msgid "Artist"
 msgstr "艺人"
 

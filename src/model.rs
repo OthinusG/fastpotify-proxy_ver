@@ -846,6 +846,11 @@ pub enum Action {
         shelf: crate::settings::LibraryShelf,
         sort: crate::settings::LibrarySort,
     },
+    ArrangeLibrary {
+        pinned: Vec<String>,
+        /// A drag outside the pin block selects this local playlist order.
+        playlist_order: Option<Vec<String>>,
+    },
     RestartEngine,
     EnablePlayback,
     ShowWindow,
