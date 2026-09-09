@@ -10,6 +10,17 @@ Point at a horizontal shelf, such as Made for you or Recently played on
 Home, and hold `Shift` while turning the mouse wheel. The shelf moves while
 the surrounding page stays put. Release `Shift` to scroll the page normally.
 
+## Dragging beyond the visible list
+
+On `main`, for the release after 0.7.1, hold a dragged song near the top or
+bottom of an editable playlist's visible area to scroll. Scrolling gets faster
+closer to the edge and stops when you move away or release the mouse. This
+lets you move a song from the end to the beginning without dropping it along
+the way. Clear filters and sorting before reordering playlist songs.
+
+The Library sidebar also scrolls near its edges when you drag a song toward a
+playlist or reorder its entries. Only the list under the pointer scrolls.
+
 ## Keyboard and screen readers
 
 The main window provides screen-reader names for playback controls, library

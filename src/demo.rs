@@ -3135,6 +3135,259 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn dragging_at_playlist_edges_reaches_rows_beyond_the_viewport() {
+        for compact in [false, true] {
+            for upwards in [false, true] {
+                let (ctx, mut app) = accessible_app(&format!("drag-scroll-{compact}-{upwards}"));
+                app.settings.tracklist_compact = compact;
+                app.open(Page::Playlist("pl1".into()));
+                let items = &mut app.playlist_pages.get_mut("pl1").unwrap().items.items;
+                let count = items.len();
+                assert!(count > 20);
+                for (index, name) in [(0, "First song"), (count - 1, "Last song")] {
+                    if let Some(PlayableItem::Track(track)) = &mut items[index].item {
+                        track.name = name.into();
+                    }
+                }
+                let from = if upwards { count - 1 } else { 0 };
+                let dragged_uri = items[from].playable().unwrap().uri().to_string();
+                let mut time = 0.0;
+                let mut draw = |app: &mut App, events, offset: Option<f32>| {
+                    time += 1.0 / 60.0;
+                    let mut result = None;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(760.0, 620.0),
+                            )),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let mut scroll = egui::ScrollArea::vertical()
+                                .id_salt("drag-scroll-playlist")
+                                .auto_shrink([false, false]);
+                            if let Some(offset) = offset {
+                                scroll = scroll.vertical_scroll_offset(offset);
+                            }
+                            let shown = scroll
+                                .show(ui, |ui| crate::ui::collection::playlist(app, ui, "pl1"));
+                            result = Some((shown.state.offset.y, shown.inner_rect));
+                        },
+                    );
+                    output.textures_delta.clear();
+                    let (offset, viewport) = result.unwrap();
+                    (
+                        offset,
+                        viewport,
+                        output.platform_output.accesskit_update.unwrap(),
+                    )
+                };
+                let row = |tree: &egui::accesskit::TreeUpdate, name: &str| {
+                    let prefix = format!("Play {name},");
+                    let bounds = tree
+                        .nodes
+                        .iter()
+                        .find(|(_, node)| {
+                            node.role() == egui::accesskit::Role::Button
+                                && node.label().is_some_and(|label| label.starts_with(&prefix))
+                        })
+                        .unwrap_or_else(|| panic!("missing {name}"))
+                        .1
+                        .bounds()
+                        .unwrap();
+                    egui::Rect::from_min_max(
+                        egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                        egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                    )
+                };
+                draw(
+                    &mut app,
+                    vec![],
+                    Some(if upwards { 100_000.0 } else { 0.0 }),
+                );
+                let (start, viewport, tree) = draw(&mut app, vec![], None);
+                let source = row(&tree, if upwards { "Last song" } else { "First song" });
+                let pos = egui::pos2(source.left() + 160.0, source.top() + 18.0);
+                assert!(viewport.contains(pos));
+                draw(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    None,
+                );
+                draw(
+                    &mut app,
+                    vec![egui::Event::PointerMoved(pos + egui::vec2(12.0, 0.0))],
+                    None,
+                );
+                assert!(
+                    egui::DragAndDrop::has_payload_of_type::<DragTrack>(&ctx),
+                    "the row must start a real drag"
+                );
+                let edge = egui::pos2(
+                    pos.x,
+                    if upwards {
+                        viewport.top() + 2.0
+                    } else {
+                        viewport.bottom() - 2.0
+                    },
+                );
+                draw(&mut app, vec![egui::Event::PointerMoved(edge)], None);
+                for _ in 0..30 {
+                    draw(&mut app, vec![], None);
+                }
+                let (moved, _, _) = draw(&mut app, vec![], None);
+                assert!(
+                    if upwards {
+                        start - moved > 200.0
+                    } else {
+                        moved - start > 200.0
+                    },
+                    "holding a stationary pointer at an edge must scroll"
+                );
+                draw(
+                    &mut app,
+                    vec![egui::Event::PointerMoved(viewport.center())],
+                    None,
+                );
+                let (paused, _, _) = draw(&mut app, vec![], None);
+                for _ in 0..10 {
+                    draw(&mut app, vec![], None);
+                }
+                let (still, _, _) = draw(&mut app, vec![], None);
+                assert_eq!(paused, still, "leaving the edge stops scrolling");
+                draw(&mut app, vec![egui::Event::PointerMoved(edge)], None);
+                for _ in 0..300 {
+                    draw(&mut app, vec![], None);
+                }
+                let (_, _, tree) = draw(&mut app, vec![], None);
+                let target = row(&tree, if upwards { "First song" } else { "Last song" });
+                let pos = egui::pos2(
+                    pos.x,
+                    if upwards {
+                        target.top() + 1.0
+                    } else {
+                        target.bottom() - 1.0
+                    },
+                );
+                draw(&mut app, vec![egui::Event::PointerMoved(pos)], None);
+                app.actions.clear();
+                draw(
+                    &mut app,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    None,
+                );
+                assert!(
+                    matches!(app.actions.as_slice(), [Action::MoveInPlaylist { playlist_id, from: actual_from, to }] if playlist_id == "pl1" && *actual_from == from as u32 && *to == if upwards { 0 } else { count as u32 })
+                );
+                for action in std::mem::take(&mut app.actions) {
+                    app.apply(action, &ctx);
+                }
+                let items = &app.playlist_pages["pl1"].items.items;
+                assert_eq!(
+                    items[if upwards { 0 } else { count - 1 }]
+                        .playable()
+                        .unwrap()
+                        .uri(),
+                    dragged_uri
+                );
+                app.backend.shutdown();
+            }
+        }
+    }
+
+    #[test]
+    fn dragging_a_library_entry_scrolls_to_offscreen_playlists() {
+        use egui::accesskit::Role;
+        for compact in [false, true] {
+            let (ctx, mut app) = accessible_app(&format!("sidebar-drag-scroll-{compact}"));
+            app.settings.sidebar_compact = compact;
+            app.rootlist.clear();
+            app.settings.pinned_contexts.clear();
+            let playlists: Vec<_> = (0..60)
+                .map(|index| {
+                    let mut playlist = playlist(1);
+                    playlist.id = format!("target{index}");
+                    playlist.uri = format!("spotify:playlist:target{index}");
+                    playlist.name = format!("Target {index}");
+                    playlist
+                })
+                .collect();
+            app.settings.sidebar_order = playlists
+                .iter()
+                .map(|playlist| playlist.uri.clone())
+                .collect();
+            app.library.playlists = Loadable::Loaded(playlists);
+            let original = app.settings.sidebar_order.clone();
+            accessible_frame(&ctx, &mut app, vec![]);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let first = accessible_node(&tree, "Target 0", Role::Button);
+            let bounds = tree
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == first)
+                .unwrap()
+                .1
+                .bounds()
+                .unwrap();
+            let pos = egui::pos2(100.0, ((bounds.y0 + bounds.y1) / 2.0) as f32);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerMoved(pos + egui::vec2(12.0, 0.0))],
+            );
+            assert!(egui::DragAndDrop::has_payload_of_type::<DragEntry>(&ctx));
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    112.0,
+                    800.0 - crate::theme::PLAYER_BAR_HEIGHT - 14.0,
+                ))],
+            );
+            for _ in 0..400 {
+                accessible_frame(&ctx, &mut app, vec![]);
+            }
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            accessible_node(&tree, "Target 59", Role::Button);
+            assert_eq!(
+                app.settings.sidebar_order, original,
+                "scrolling alone must not reorder entries"
+            );
+            egui::DragAndDrop::clear_payload(&ctx);
+            app.backend.shutdown();
+        }
+    }
+
     /// Dragging a row within an owned playlist's table moves it through
     /// the same MoveInPlaylist action the menu's move items use: the slot
     /// is Spotify's insert-before, which the handler mirrors locally

@@ -48,6 +48,9 @@ everyday use, and connection details.
   Artist names in the player bar open their pages, including during local
   playback before Web API metadata arrives (on `main`, after 0.7.1).
 - **Edit your playlists.** Create, rename, describe, reorder, and delete them.
+  On `main`, after 0.7.1, hold a dragged song near the playlist's top or bottom
+  edge to scroll to rows beyond the screen. The Library sidebar scrolls while
+  dragging toward offscreen playlists too.
   Add songs from a row menu, or drag a row or the currently playing song to a
   playlist in the sidebar. A playlist a friend shared with you takes songs too,
   as Spotify's own apps allow. Filter the **Add to playlist** menu by name to
