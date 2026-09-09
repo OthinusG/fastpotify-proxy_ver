@@ -42,8 +42,12 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let dirs = fastpotify::paths::AppDirs::discover();
-    let credentials = fastpotify::zeroconf::Credentials::load(&dirs.credentials_dir())?;
+    let Some(fastpotify::credentials::Grant::Playback(grant)) =
+        stored_grant(fastpotify::credentials::Slot::Playback)?
+    else {
+        anyhow::bail!("Enable playback in Fastpotify first");
+    };
+    let credentials = fastpotify::zeroconf::Credentials::from_playback(&grant)?;
     println!("\nhanding the account to {} ...", receiver.name);
     let info = fastpotify::zeroconf::get_info(&http, receiver)?;
     match fastpotify::zeroconf::add_user(&http, receiver, &info, &credentials, "Fastpotify") {
@@ -71,14 +75,15 @@ fn main() -> anyhow::Result<()> {
 
 /// The account's devices as Spotify currently sees them.
 fn devices() -> anyhow::Result<Vec<String>> {
-    let home = std::env::var("HOME")?;
-    let token: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!(
-        "{home}/.local/state/fastpotify/web_api_token.json"
-    ))?)?;
+    let Some(fastpotify::credentials::Grant::Web(token)) =
+        stored_grant(fastpotify::credentials::Slot::Shared)?
+    else {
+        anyhow::bail!("Sign in to Fastpotify first");
+    };
     let http = reqwest::blocking::Client::new();
     let body: serde_json::Value = http
         .get("https://api.spotify.com/v1/me/player/devices")
-        .bearer_auth(token["access_token"].as_str().unwrap_or_default())
+        .bearer_auth(&token.access_token)
         .send()?
         .json()?;
     Ok(body["devices"]
@@ -97,4 +102,20 @@ fn devices() -> anyhow::Result<Vec<String>> {
                 .collect()
         })
         .unwrap_or_default())
+}
+
+fn stored_grant(
+    slot: fastpotify::credentials::Slot,
+) -> anyhow::Result<Option<fastpotify::credentials::Grant>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let loaded = runtime.block_on(async {
+        let store = fastpotify::credentials::Store::new(fastpotify::paths::AppDirs::discover());
+        store.lease(slot).load().await
+    })?;
+    if let Some(warning) = loaded.warning {
+        eprintln!("{warning}");
+    }
+    Ok(loaded.grant)
 }

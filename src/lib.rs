@@ -5,6 +5,7 @@ pub mod app;
 pub mod auth;
 pub mod backend;
 pub mod bidi;
+pub mod credentials;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
 pub mod eq;

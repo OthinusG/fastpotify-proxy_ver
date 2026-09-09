@@ -103,25 +103,17 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    /// Reads the reusable credential librespot stored for local playback.
-    pub fn load(credentials_dir: &std::path::Path) -> Result<Self> {
-        #[derive(Deserialize)]
-        struct Stored {
-            username: String,
-            auth_type: i64,
-            auth_data: String,
-        }
-        let path = credentials_dir.join("credentials.json");
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("no stored playback credential at {}", path.display()))?;
-        let stored: Stored =
-            serde_json::from_str(&text).context("stored playback credential is unreadable")?;
+    /// Use the in-memory reusable grant already loaded from protected storage.
+    pub fn from_playback(stored: &librespot_core::authentication::Credentials) -> Result<Self> {
+        use protobuf::Enum;
         Ok(Self {
-            username: stored.username,
-            auth_type: stored.auth_type,
-            auth_data: BASE64
-                .decode(stored.auth_data)
-                .context("stored playback credential is malformed")?,
+            username: stored
+                .username
+                .clone()
+                .filter(|name| !name.is_empty())
+                .context("playback account is missing")?,
+            auth_type: i64::from(stored.auth_type.value()),
+            auth_data: stored.auth_data.clone(),
         })
     }
 }
@@ -436,6 +428,24 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn receiver_handoff_uses_the_in_memory_playback_grant() {
+        let stored = librespot_core::authentication::Credentials {
+            username: Some("dummy-account".into()),
+            auth_type: librespot_protocol::authentication::AuthenticationType::AUTHENTICATION_STORED_SPOTIFY_CREDENTIALS,
+            auth_data: b"dummy-reusable-grant".to_vec(),
+        };
+        let handoff = super::Credentials::from_playback(&stored).unwrap();
+        assert_eq!(handoff.username, "dummy-account");
+        assert_eq!(handoff.auth_data, b"dummy-reusable-grant");
+        assert!(
+            super::Credentials::from_playback(
+                &librespot_core::authentication::Credentials::with_access_token("dummy-token")
+            )
+            .is_err()
+        );
+    }
+
     use super::*;
 
     #[test]

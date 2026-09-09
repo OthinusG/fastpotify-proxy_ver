@@ -13,9 +13,11 @@ Fastpotify follows each platform's conventions. On Linux:
 | Settings | `~/.config/fastpotify/settings.json` | Yes, you lose preferences |
 | Winamp skins | `~/.config/fastpotify/skins/` | Yes, you add them again |
 | MilkDrop presets | `~/.config/fastpotify/milkdrop/` | Yes, you fetch them again |
-| Shared Web API sign-in | `~/.local/state/fastpotify/shared_web_api_token.json` | Yes, you sign in again |
-| Personal Web API sign-in | `~/.local/state/fastpotify/personal_web_api_token.json` | Yes, the personal app is disabled |
-| Playback credential | `~/.local/state/fastpotify/credentials/` | Yes, you approve playback again |
+| Spotify grants (on `main`, after 0.7.1) | System credential store | Use Sign out in Settings |
+| Credential revocation markers (on `main`, after 0.7.1) | `~/.local/state/fastpotify/credential-storage/` | Keep after a failed sign-out deletion |
+| Legacy shared Web API grant | `~/.local/state/fastpotify/shared_web_api_token.json` | Removed after migration or sign-out |
+| Legacy personal Web API grant | `~/.local/state/fastpotify/personal_web_api_token.json` | Removed after migration or sign-out |
+| Legacy playback credential | `~/.local/state/fastpotify/credentials/` | Removed after migration or sign-out |
 | Last session | `~/.local/state/fastpotify/session.json` | Yes |
 | Play history | `~/.local/state/fastpotify/history.json` | Yes |
 | Audio cache | `~/.cache/fastpotify/audio/` | Always |
@@ -25,20 +27,51 @@ Fastpotify follows each platform's conventions. On Linux:
 | Last run's log | `~/.local/state/fastpotify/fastpotify.log` | Always |
 | Crash log | `~/.local/state/fastpotify/panic.log` | Always |
 
-Clearing caches never signs you out; credentials live in *state*, not
-*cache*. Signing out from Settings deletes both Web API grants and the
-separate playback credential.
+Clearing caches never signs you out. Sign-out from Settings covers the shared
+and personal Web API grants and the independent playback credential.
 
-The Web API files contain access and refresh tokens, and the playback
-credential can be reused to sign in. These are unencrypted files, not entries
-in the operating system's credential store. On Unix, the Web API writer
-requests mode `0600` (owner read/write) when creating a file; it does not
-repair permissions on an existing temporary file. On Windows, permissions
-are inherited from the containing directory. Librespot's playback credential
-writer uses the system's default file permissions, including the Unix umask
-or inherited Windows access rules, without explicitly restricting them to
-the owner. Keep token files, their temporary copies, and the `credentials/`
-directory out of issue attachments and diagnostic uploads.
+The following credential storage is on `main`, for the release after 0.7.1.
+
+Durable grants use **Secret Service on Linux**, **Keychain on macOS**, and
+**Credential Manager on Windows**, under the service name
+`rocks.fastpotify.Fastpotify`. Entries are separated by application state
+location and grant type; Web grants carry their Client ID and must verify as
+the same account. Playback and receiver activation require that account too.
+Non-secret settings and session data remain readable JSON. Native credential
+protection reduces exposure from copying ordinary application files. It does
+not protect a usable session from arbitrary code running as the same user;
+Linux protection also depends on the desktop keyring's configuration.
+
+On Linux, enable and unlock a Secret Service provider such as GNOME Keyring or
+KWallet to remember a new sign-in. Flatpak is allowed to talk to
+`org.freedesktop.secrets` for this purpose. An unavailable or locked store
+produces an error without blocking the interface. A new sign-in can still be
+used for this session, with no new plaintext fallback file.
+
+On upgrade, each legacy grant is written to the protected store and read back
+before its old file is removed. Valid grants migrate without signing in again.
+If Spotify rejects a saved refresh grant, only that grant is forgotten so the
+next launch cannot keep restoring it. If migration fails, Fastpotify reports it and
+keeps the original so migration can be retried. That grant can still serve the
+current session. A successfully migrated grant is never replaced by a stale
+legacy copy. Librespot's reusable grant stays in memory until Fastpotify saves
+it through this same store. Volume and disposable audio caches are independent.
+
+Sign-out invalidates pending authorization, refresh, and playback connections,
+and cancels pending Spotify requests so their results cannot undo a new sign-in.
+It records non-secret revocation markers before deleting the protected entries
+and all legacy token files, including temporary copies. A locked store or
+filesystem failure is reported. Revocation markers prevent a failed protected
+entry deletion from restoring the session on restart; keep these markers when
+a deletion failed. Removing or changing a personal Client ID clears that app's
+old grant.
+
+Version 0.7.1 and earlier use the legacy unencrypted files listed above. Their
+Web API writer requests owner-only permissions for newly created Unix files;
+Windows uses inherited permissions. Librespot's old writer uses the system's
+file defaults. Keep these legacy files, their temporary copies, the
+`credentials/` directory, and credential-store exports out of issue attachments
+and diagnostic uploads.
 
 Progress through a playlist is periodically cached as a contiguous prefix.
 When the playlist has not changed on Spotify, reopening it resumes from that

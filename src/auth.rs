@@ -3,10 +3,10 @@
 //! Three independent grants may exist because Spotify treats them differently:
 //!
 //! - The shared and optional personal **Web API grants** use separate
-//!   registered application identities, token files, and request sessions.
+//!   registered application identities, protected entries, and request sessions.
 //! - The **playback grant** uses Spotify's desktop client identity, the one
 //!   librespot streams with. Its access token is exchanged once for a
-//!   reusable credential that librespot caches itself.
+//!   reusable credential kept in the platform credential store.
 //!
 //! The browser does the password entry; this process only ever sees the
 //! one-time authorization code that Spotify sends back to a loopback
@@ -215,7 +215,7 @@ fn parse_request_line(line: &str, expected_state: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("malformed request"))?;
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     if path != REDIRECT_PATH {
-        bail!("unexpected path {path}");
+        bail!("unexpected redirect path");
     }
     let mut code = None;
     let mut state = None;
@@ -232,8 +232,8 @@ fn parse_request_line(line: &str, expected_state: &str) -> Result<String> {
             _ => {}
         }
     }
-    if let Some(error) = error {
-        bail!("Spotify refused the sign-in: {error}");
+    if error.is_some() {
+        bail!("Spotify refused the sign-in. Try again.");
     }
     if state.as_deref() != Some(expected_state) {
         bail!("state mismatch");
@@ -299,37 +299,40 @@ async fn token_request(
         .map_err(|error| TokenEndpointError::Unreachable(error.to_string()))?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
+    decode_token_response(status, &text)
+}
+
+fn decode_token_response(
+    status: reqwest::StatusCode,
+    text: &str,
+) -> std::result::Result<TokenResponse, TokenEndpointError> {
     if status.is_client_error() {
-        let detail = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|value| {
-                value["error_description"]
-                    .as_str()
-                    .or(value["error"].as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| redact(&text));
+        let value = serde_json::from_str::<serde_json::Value>(text).ok();
+        // OAuth descriptions and malformed bodies may contain usable grants.
+        // Report only known classifications, never authorization response text.
+        let detail = match value.as_ref().and_then(|value| value["error"].as_str()) {
+            Some("invalid_grant") => "The grant expired or was revoked. Sign in again.",
+            Some("invalid_client") => "Check the Spotify application's Client ID.",
+            Some("invalid_scope") => "Spotify did not accept the requested permissions.",
+            Some("access_denied") => "Spotify authorization was declined.",
+            _ => "Sign in again and check the Spotify application settings.",
+        };
         return Err(TokenEndpointError::Rejected {
             status: status.as_u16(),
-            detail,
+            detail: detail.into(),
         });
     }
     if !status.is_success() {
         return Err(TokenEndpointError::Unreachable(format!(
-            "Spotify answered {status}: {}",
-            redact(&text)
+            "Spotify answered {status}"
         )));
     }
-    serde_json::from_str(&text).map_err(|error| {
-        TokenEndpointError::Unreachable(format!("unexpected token response: {error}"))
+    serde_json::from_str(text).map_err(|_| {
+        TokenEndpointError::Unreachable("Spotify returned an unreadable token response".into())
     })
 }
 
-fn redact(text: &str) -> String {
-    text.chars().take(200).collect()
-}
-
-/// The Web API grant as kept on disk between runs.
+/// The Web API grant, serialized only inside protected credential storage.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StoredToken {
     pub client_id: String,
@@ -380,6 +383,8 @@ impl StoredToken {
         serde_json::from_str(&text).ok()
     }
 
+    // Legacy file fixtures only. Production persistence lives in credentials.rs.
+    #[cfg(test)]
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -391,10 +396,14 @@ impl StoredToken {
         Ok(())
     }
 
+    // Legacy file fixtures only. Production persistence lives in credentials.rs.
+    #[cfg(test)]
     pub fn remove(path: &Path) {
         let _ = std::fs::remove_file(path);
     }
 
+    // Legacy file fixtures only. Production persistence lives in credentials.rs.
+    #[cfg(test)]
     pub fn migrate_legacy(legacy: &Path, shared: &Path, personal: &Path) -> Result<()> {
         let Some(token) = Self::load(legacy) else {
             return Ok(());
@@ -416,6 +425,7 @@ impl StoredToken {
     }
 }
 
+#[cfg(test)]
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
@@ -469,6 +479,34 @@ fn failure_page(reason: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn token_errors_never_include_authorization_response_contents() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"error":"invalid_grant","error_description":"dummy-refresh-secret"}"#,
+            ),
+            (400, r#"{"error":"dummy-refresh-secret"}"#),
+            (503, "dummy-refresh-secret"),
+            (
+                200,
+                r#"{"access_token":"dummy-refresh-secret","expires_in":"dummy-refresh-secret"}"#,
+            ),
+        ] {
+            let error =
+                super::decode_token_response(reqwest::StatusCode::from_u16(status).unwrap(), body)
+                    .unwrap_err();
+            assert!(!format!("{error:?} {error}").contains("dummy-refresh-secret"));
+        }
+        for request in [
+            "GET /login?error=dummy-authorization-secret&state=ok HTTP/1.1",
+            "GET /dummy-authorization-secret HTTP/1.1",
+        ] {
+            let error = super::parse_request_line(request, "ok").unwrap_err();
+            assert!(!format!("{error:?} {error}").contains("dummy-authorization-secret"));
+        }
+    }
+
     use super::*;
 
     #[test]

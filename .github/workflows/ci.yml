@@ -96,6 +96,10 @@ jobs:
         run: cargo test --locked --all-targets
       - name: Tests (all features)
         run: cargo test --locked --all-targets --all-features
+      - name: Native credential store (dummy grants)
+        if: runner.os == 'Windows' || runner.os == 'macOS'
+        timeout-minutes: 2
+        run: cargo test --locked --lib credentials::tests::native_store_round_trip -- --ignored --exact
       - name: Documentation tests
         run: cargo test --locked --all-features --doc
       # A build can pass while importing Microsoft's C++ runtime, then fail on

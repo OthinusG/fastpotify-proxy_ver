@@ -18,7 +18,7 @@ local playback:
    account.
 3. **Local playback** uses
    [librespot](https://github.com/librespot-org/librespot). It needs one more
-   browser approval and stores its own reusable credential. Spotify Premium
+   browser approval and keeps an independent reusable credential. Spotify Premium
    is required.
 
 Local playback authorization stays separate from both Web API grants. Its
@@ -27,6 +27,13 @@ consent dialog. The playback session uses the account ID verified by either
 Web API grant. A verified personal app can complete sign-in while the shared
 app's verification is still waiting.
 
+On `main`, for the release after 0.7.1, requests that need a grant still being
+verified wait for it instead of showing "not signed in". Sign-out cancels
+pending requests, and their late results cannot undo a new sign-in. If Spotify
+rejects a saved refresh grant, Fastpotify removes that grant and asks for a new
+browser approval. Upgrading to protected storage does not itself require
+signing in again.
+
 By default, Fastpotify uses the public app shared with spotify-player, ncspot,
 and Omarchy Spotify. Spotify divides its quota among all users. A personal app
 adds a separate Development Mode quota. See
@@ -34,12 +41,13 @@ adds a separate Development Mode quota. See
 
 ## What the client stores
 
-- Shared and personal Web API access and refresh tokens, plus librespot's
-  reusable playback credential, in unencrypted files in the state directory.
-  Newly created Web API token files request owner-only permissions on Unix;
-  Windows uses inherited file permissions. Librespot's credential writer
-  relies on system defaults and does not explicitly set owner-only permissions.
-  See [file locations and protection](/settings-and-files/).
+- On `main`, for the release after 0.7.1, shared and personal Web API grants
+  and the reusable playback credential use the platform credential store:
+  Secret Service on Linux, Keychain on macOS, and Credential Manager on
+  Windows. Librespot retains its reusable credential in memory; Fastpotify
+  owns persistence. Flatpak can talk to `org.freedesktop.secrets` for this.
+  Version 0.7.1 still uses the older unencrypted files.
+  See [migration, sign-out, and storage protection](/settings-and-files/).
 - Downloaded audio and artwork, in the cache directory, within the budget
   you set.
 - The first time MilkDrop opens with an empty preset folder, the two projectM

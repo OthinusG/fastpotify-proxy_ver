@@ -26,6 +26,9 @@ serde_json = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 directories = "6"
+# One protected-store API, with only each target's native provider below.
+# Durable Spotify grants must not be copied into ordinary state JSON.
+keyring-core = "1"
 # The whole UI. glow keeps the binary and the dependency tree small; wgpu is
 # not needed for a 2D music client.
 # AccessKit connects egui's control names, states, and actions to native screen readers.
@@ -113,6 +116,7 @@ tray-icon = { version = "0.24", default-features = false }
 souvlaki = { version = "0.8", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Serving AppKit while no window exists: the status item and Dock reopen
 # callback live on the main thread.
 objc2 = "0.6"
@@ -122,10 +126,13 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = { version = "1.1", default-features = false }
 # A hidden window for the media controls to belong to, and message loops.
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Reuses the zbus/Tokio stack already used for desktop integration.
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 ksni = { version = "0.3", features = ["blocking"] }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend", "pulseaudio-backend", "rustls-tls-native-roots"] }
 mpris-server = { version = "0.10", features = ["tokio"] }
@@ -175,7 +182,8 @@ projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect
 # librespot 0.8.0 plus the small patches Fastpotify needs: queue controls,
 # normalisation-factor reporting for the visualisers, and a distinct event
 # when Spotify refuses an audio key, and a connection deadline that includes
-# socket setup. Every librespot crate comes from the
+# socket setup, plus an in-memory credential cache for platform storage.
+# Every librespot crate comes from the
 # fork so one copy exists. Drop patches as upstream takes them.
 librespot-audio = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
 librespot-connect = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }

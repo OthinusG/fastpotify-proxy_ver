@@ -927,10 +927,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Sign-in",
-            &format!(
-                "Credentials are kept in {}",
-                app.dirs.credentials_dir().display()
-            ),
+            "Sign-ins are saved in the system credential store when available.",
             |_| {},
         );
     });

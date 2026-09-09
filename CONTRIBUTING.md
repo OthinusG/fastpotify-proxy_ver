@@ -122,6 +122,14 @@ MilkDrop out and needs none of that. CI repeats the test suite on Linux,
 macOS, and Windows. Passing CI is required, but does not replace review
 for correctness, product fit, maintainability, or security.
 
+Credential-storage changes also need a native store round trip. With the
+desktop keyring unlocked, run
+`cargo test --locked --lib credentials::tests::native_store_round_trip -- --ignored --exact`.
+It uses temporary dummy grants and deletes them afterward. CI runs this check
+on macOS and Windows; Linux requires an available Secret Service provider.
+The ordinary test suite uses an isolated fake store and never reads a real
+Spotify grant. Demo mode also skips credential restoration.
+
 When changing `Cargo.lock` or `flake.nix`, also verify `nix build .#default`
 on a Nix host or wait for the Nix CI job. A package-version-only lockfile
 change can change the vendor hash. Releases must wait for all required CI

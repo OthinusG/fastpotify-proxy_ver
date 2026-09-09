@@ -140,6 +140,8 @@ pub enum Target {
 /// How the application is being started.
 #[derive(Clone, Copy, Debug)]
 pub struct AppOptions {
+    /// Demo and isolated tests must not read or migrate real Spotify grants.
+    pub restore_sign_in: bool,
     /// Register the MPRIS media-control service (Linux).
     pub media_controls: bool,
     /// Register the system-tray item (Linux).
@@ -149,6 +151,7 @@ pub struct AppOptions {
 impl Default for AppOptions {
     fn default() -> Self {
         Self {
+            restore_sign_in: true,
             media_controls: true,
             tray: true,
         }
@@ -474,6 +477,7 @@ impl App {
             engine_config,
             settings.web_client_id.clone(),
             waker.clone(),
+            options.restore_sign_in,
         );
         let session = SessionState::load(&dirs.session_file());
         let wake = waker.clone();
@@ -6929,7 +6933,6 @@ pub fn engine_config(
             .clone()
             .filter(|device| !device.trim().is_empty()),
         initial_volume: settings.volume,
-        credentials_dir: dirs.credentials_dir(),
         volume_dir: dirs.volume_dir(),
         audio_cache_dir: settings.audio_cache.then(|| dirs.audio_cache_dir()),
         audio_cache_limit: Some(settings.audio_cache_mb.max(64) * 1024 * 1024),
@@ -8711,6 +8714,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         )
@@ -8897,6 +8901,7 @@ mod tests {
         };
         let options = AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
         let mut app = App::new(
@@ -8916,6 +8921,7 @@ mod tests {
 
         let options = AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
         let app = App::new(&Waker::default(), dirs, Settings::default(), options);
@@ -9271,6 +9277,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -10828,6 +10835,7 @@ mod tests {
         };
         let options = || AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
         let entries = vec![

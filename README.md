@@ -167,13 +167,23 @@ uses when another Spotify client is installed too.
 
 Press **Sign in with Spotify**. Your browser opens Spotify's consent page
 (Authorization Code with PKCE), so Fastpotify never sees your password. The
-app stores a refresh token in the platform's state directory
-(`~/.local/state/fastpotify` on Linux). You usually sign in once per machine.
+app keeps its grants in the system credential store: Secret Service on Linux,
+Keychain on macOS, and Credential Manager on Windows. You usually sign in once
+per machine. If the store is unavailable or locked, a new sign-in works for
+this session and Fastpotify explains that it could not save it.
 
 Playing music **on this computer** needs a second, one-time browser approval.
 Spotify handles streaming separately from library access. Start it from the
 device menu (**Set up playback here**) or Settings. It needs Spotify
-Premium, and librespot stores a reusable credential for later sessions.
+Premium. Its reusable credential uses the same protected storage, independently
+of the two Web API grants.
+
+Existing token files migrate after the protected write has been read back
+successfully. A failed migration keeps the original for recovery and reports
+an error. Sign-out removes shared, personal, and playback grants, including
+legacy files and pending writes. Non-secret revocation markers prevent a
+failed keychain deletion from silently restoring a signed-out session.
+See [credential storage and file locations](docs/_reference/settings-and-files.md).
 
 Playback approval requests Spotify's streaming permission separately. A
 verified personal app can complete sign-in while the shared app is busy.

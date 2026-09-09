@@ -848,6 +848,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2033,6 +2034,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2106,6 +2108,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2158,6 +2161,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2238,6 +2242,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2320,6 +2325,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2415,6 +2421,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2518,6 +2525,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2621,6 +2629,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2677,6 +2686,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2755,6 +2765,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2826,6 +2837,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2902,6 +2914,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -2977,6 +2990,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
@@ -3128,6 +3142,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );

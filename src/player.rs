@@ -46,7 +46,6 @@ pub struct EngineConfig {
     pub backend: Option<String>,
     pub audio_device: Option<String>,
     pub initial_volume: u16,
-    pub credentials_dir: PathBuf,
     pub volume_dir: PathBuf,
     pub audio_cache_dir: Option<PathBuf>,
     pub audio_cache_limit: Option<u64>,
@@ -66,11 +65,12 @@ impl EngineConfig {
 
     pub fn open_cache(&self) -> Result<Cache> {
         Cache::new(
-            Some(self.credentials_dir.as_path()),
+            None,
             Some(self.volume_dir.as_path()),
             self.audio_cache_dir.as_deref(),
             self.audio_cache_limit,
         )
+        .map(Cache::with_memory_credentials)
         .context("unable to open the playback cache")
     }
 
@@ -275,6 +275,9 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub(crate) fn credentials(&self) -> Option<Credentials> {
+        self.session.cache().and_then(|cache| cache.credentials())
+    }
     /// Connects to Spotify and announces this device on Spotify Connect.
     pub async fn connect(
         config: &EngineConfig,
@@ -1162,7 +1165,6 @@ mod tests {
             backend: None,
             audio_device: None,
             initial_volume: 1,
-            credentials_dir: PathBuf::new(),
             volume_dir: PathBuf::new(),
             audio_cache_dir: None,
             audio_cache_limit: None,

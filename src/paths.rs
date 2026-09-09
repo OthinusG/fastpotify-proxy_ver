@@ -1,9 +1,8 @@
 //! Where Fastpotify keeps its files.
 //!
-//! Configuration, durable state (Spotify credentials), and disposable caches
-//! (audio, artwork) live in the platform's conventional directories, so
-//! clearing a cache never signs the user out and a config backup never
-//! contains a credential.
+//! Configuration, durable non-secret state, and disposable caches live in the
+//! platform's conventional directories. Spotify grants use the platform store;
+//! the token paths below are retained only for migration and sign-out cleanup.
 
 use std::path::PathBuf;
 

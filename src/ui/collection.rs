@@ -1534,6 +1534,7 @@ mod tests {
             crate::settings::Settings::default(),
             crate::app::AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         )
