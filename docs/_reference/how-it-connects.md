@@ -34,9 +34,12 @@ adds a separate Development Mode quota. See
 
 ## What the client stores
 
-- Shared and personal Web API refresh tokens, plus librespot's credential, in
-  the state directory with owner-only permissions
-  ([file locations](/settings-and-files/)).
+- Shared and personal Web API access and refresh tokens, plus librespot's
+  reusable playback credential, in unencrypted files in the state directory.
+  Newly created Web API token files request owner-only permissions on Unix;
+  Windows uses inherited file permissions. Librespot's credential writer
+  relies on system defaults and does not explicitly set owner-only permissions.
+  See [file locations and protection](/settings-and-files/).
 - Downloaded audio and artwork, in the cache directory, within the budget
   you set.
 - The first time MilkDrop opens with an empty preset folder, the two projectM
