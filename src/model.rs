@@ -519,6 +519,9 @@ pub struct PlaylistPage {
     /// Snapshot returned by the latest successful write. A lagging metadata
     /// read must not replace it with the snapshot from before that write.
     pub optimistic_snapshot: Option<String>,
+    /// Writes still awaiting a result. Keep their optimistic rows in memory
+    /// even when navigation moves beyond the usual page-cache limit.
+    pub pending_writes: usize,
     /// Number of immediate metadata reads made while Spotify still reported
     /// the pre-write snapshot.
     pub snapshot_rechecks: u8,

@@ -278,6 +278,8 @@ pub struct App {
     track_requests: HashSet<String>,
     /// Built table rows, keyed by page. Capped; dropped on reset and eviction.
     pub table_rows: HashMap<Page, TableRowsCache>,
+    page_used: HashMap<Page, Instant>,
+    track_used: HashMap<String, Instant>,
 
     pub history: Vec<Page>,
     pub history_index: usize,
@@ -587,6 +589,8 @@ impl App {
             track_cache: HashMap::new(),
             track_requests: HashSet::new(),
             table_rows: HashMap::new(),
+            page_used: HashMap::new(),
+            track_used: HashMap::new(),
             history: vec![first_page],
             history_index: 0,
             saved: HashMap::new(),
@@ -1476,6 +1480,8 @@ impl App {
         self.search.results = Loadable::NotLoaded;
         self.search.committed.clear();
         self.table_rows.clear();
+        self.page_used.clear();
+        self.track_used.clear();
     }
 
     /// Drop table-row caches whose pages are gone, and cap what remains.
@@ -1639,7 +1645,11 @@ impl App {
         let Some(id) = util::uri_id(&uri).map(str::to_string) else {
             return;
         };
-        if self.track_cache.contains_key(&id) || !self.track_requests.insert(id.clone()) {
+        if self.track_cache.contains_key(&id) {
+            self.track_used.insert(id, Instant::now());
+            return;
+        }
+        if !self.track_requests.insert(id.clone()) {
             return;
         }
         self.backend.api(ApiRequest::Track { id });
@@ -1821,6 +1831,7 @@ impl App {
             return;
         };
         if self.track_cache.contains_key(id) {
+            self.track_used.insert(id.to_owned(), Instant::now());
             return;
         }
         let found = if let Some(pid) = context_uri.strip_prefix("spotify:playlist:") {
@@ -1854,6 +1865,7 @@ impl App {
         if let Some(track) = found {
             self.remember_track_recording(&track);
             self.track_cache.insert(id.to_owned(), track);
+            self.track_used.insert(id.to_owned(), Instant::now());
         }
     }
 
@@ -2116,6 +2128,7 @@ impl App {
         if self.last_eviction.elapsed() > Duration::from_secs(20) {
             self.last_eviction = now;
             self.backend.art().evict(ctx);
+            self.evict_stale_pages();
         }
         self.sync_skin(ctx);
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
@@ -3991,6 +4004,9 @@ impl App {
                 result,
             } => {
                 self.playlist_busy = false;
+                if let Some(page) = self.playlist_pages.get_mut(&id) {
+                    page.pending_writes = page.pending_writes.saturating_sub(1);
+                }
                 match result {
                     Ok(snapshot) => {
                         if !message.is_empty() {
@@ -4383,7 +4399,8 @@ impl App {
                         if self.liked_songs.update_track(&track) {
                             self.sync_liked_songs();
                         }
-                        self.track_cache.insert(id, track);
+                        self.track_cache.insert(id.clone(), track);
+                        self.track_used.insert(id, Instant::now());
                     }
                     Err(error) => {
                         if self.pending_link.as_deref()
@@ -4471,6 +4488,7 @@ impl App {
     // ---- navigation ------------------------------------------------------------
 
     pub fn open(&mut self, page: Page) {
+        self.touch_page(&page);
         if *self.page() == page {
             self.ensure_loaded(page.clone());
             self.retain_table_rows(&page);
@@ -4485,6 +4503,7 @@ impl App {
         self.show_devices = false;
         self.ensure_loaded(page.clone());
         self.retain_table_rows(&page);
+        self.evict_stale_pages();
     }
 
     /// Hands the app a Spotify link from outside, a canonical URI as
@@ -4512,7 +4531,7 @@ impl App {
         let id = util::uri_id(&uri).unwrap_or_default().to_string();
         match util::uri_kind(&uri) {
             Some("track") => {
-                if let Some(track) = self.track_cache.get(&id) {
+                if let Some(track) = self.read_cached_track(&id) {
                     self.pending_link = None;
                     let album = track
                         .album
@@ -4546,6 +4565,128 @@ impl App {
 
     pub fn can_go_forward(&self) -> bool {
         self.history_index + 1 < self.history.len()
+    }
+
+    fn touch_page(&mut self, page: &Page) {
+        self.page_used.insert(page.clone(), Instant::now());
+    }
+
+    fn read_cached_track(&mut self, id: &str) -> Option<Track> {
+        let track = self.track_cache.get(id).cloned()?;
+        self.track_used.insert(id.to_owned(), Instant::now());
+        Some(track)
+    }
+
+    /// Drops page caches that exceed the cap, keeping the open page, the
+    /// playing context, and the most recently used pages. History does not
+    /// protect a page from the cap. Track metadata is an LRU of 800.
+    /// Table-row copies of dropped playlist and album pages go with them.
+    fn evict_stale_pages(&mut self) {
+        const MAX_PLAYLIST_PAGES: usize = 12;
+        const MAX_ALBUM_PAGES: usize = 16;
+        const MAX_ARTIST_PAGES: usize = 10;
+        const MAX_SHOW_PAGES: usize = 8;
+        const MAX_TRACK_CACHE: usize = 800;
+
+        let mut protected_playlists = HashSet::new();
+        for (id, page) in &self.playlist_pages {
+            if page.pending_writes > 0 || page.optimistic_snapshot.is_some() {
+                protected_playlists.insert(id.clone());
+            }
+        }
+        let mut protected_albums = HashSet::new();
+        let mut protected_artists = HashSet::new();
+        let mut protected_shows = HashSet::new();
+        match self.page() {
+            Page::Playlist(id) => {
+                protected_playlists.insert(id.clone());
+            }
+            Page::Album(id) => {
+                protected_albums.insert(id.clone());
+            }
+            Page::Artist(id) => {
+                protected_artists.insert(id.clone());
+            }
+            Page::Show(id) => {
+                protected_shows.insert(id.clone());
+            }
+            _ => {}
+        }
+        if let Some(uri) = self.playing_context_uri()
+            && let Some(kind) = util::uri_kind(&uri)
+            && let Some(id) = util::uri_id(&uri)
+        {
+            match kind {
+                "playlist" => {
+                    protected_playlists.insert(id.to_string());
+                }
+                "album" => {
+                    protected_albums.insert(id.to_string());
+                }
+                "artist" => {
+                    protected_artists.insert(id.to_string());
+                }
+                "show" => {
+                    protected_shows.insert(id.to_string());
+                }
+                _ => {}
+            }
+        }
+        evict_lru_map(
+            &mut self.playlist_pages,
+            &self.page_used,
+            |id| Page::Playlist(id.to_string()),
+            &protected_playlists,
+            MAX_PLAYLIST_PAGES,
+        );
+        evict_lru_map(
+            &mut self.album_pages,
+            &self.page_used,
+            |id| Page::Album(id.to_string()),
+            &protected_albums,
+            MAX_ALBUM_PAGES,
+        );
+        evict_lru_map(
+            &mut self.artist_pages,
+            &self.page_used,
+            |id| Page::Artist(id.to_string()),
+            &protected_artists,
+            MAX_ARTIST_PAGES,
+        );
+        evict_lru_map(
+            &mut self.show_pages,
+            &self.page_used,
+            |id| Page::Show(id.to_string()),
+            &protected_shows,
+            MAX_SHOW_PAGES,
+        );
+        self.page_used.retain(|page, _| match page {
+            Page::Playlist(id) => self.playlist_pages.contains_key(id),
+            Page::Album(id) => self.album_pages.contains_key(id),
+            Page::Artist(id) => self.artist_pages.contains_key(id),
+            Page::Show(id) => self.show_pages.contains_key(id),
+            _ => true,
+        });
+        if self.track_cache.len() > MAX_TRACK_CACHE {
+            let playing = self.now_playing().and_then(|now| now.id);
+            let overflow = self.track_cache.len() - MAX_TRACK_CACHE;
+            let mut victims: Vec<(Option<Instant>, String)> = self
+                .track_cache
+                .keys()
+                .filter(|id| playing.as_ref() != Some(*id))
+                .map(|id| {
+                    let used = self.track_used.get(id).copied();
+                    (used, id.clone())
+                })
+                .collect();
+            victims.sort();
+            for (_, id) in victims.into_iter().take(overflow) {
+                self.track_cache.remove(&id);
+                self.track_used.remove(&id);
+            }
+        }
+        let current = self.page().clone();
+        self.retain_table_rows(&current);
     }
 
     // ---- playback --------------------------------------------------------------
@@ -5424,6 +5565,7 @@ impl App {
         let Some(page) = self.playlist_pages.get_mut(id) else {
             return;
         };
+        page.pending_writes += 1;
         self.load_generation += 1;
         page.generation = self.load_generation;
         page.items_generation = page.generation;
@@ -5551,16 +5693,20 @@ impl App {
                 if self.can_go_back() {
                     self.history_index -= 1;
                     let page = self.page().clone();
+                    self.touch_page(&page);
                     self.ensure_loaded(page.clone());
                     self.retain_table_rows(&page);
+                    self.evict_stale_pages();
                 }
             }
             Action::Forward => {
                 if self.can_go_forward() {
                     self.history_index += 1;
                     let page = self.page().clone();
+                    self.touch_page(&page);
                     self.ensure_loaded(page.clone());
                     self.retain_table_rows(&page);
+                    self.evict_stale_pages();
                 }
             }
             Action::PlayContext {
@@ -7086,6 +7232,31 @@ fn cap_uris(uris: &[String], index: u32) -> (Vec<String>, u32) {
     let start = (index as usize).min(uris.len().saturating_sub(1));
     let end = (start + MAX).min(uris.len());
     (uris[start..end].to_vec(), 0)
+}
+
+fn evict_lru_map<V>(
+    map: &mut HashMap<String, V>,
+    used: &HashMap<Page, Instant>,
+    to_page: impl Fn(&str) -> Page,
+    protected: &HashSet<String>,
+    max: usize,
+) {
+    if map.len() <= max {
+        return;
+    }
+    let overflow = map.len() - max;
+    let mut victims: Vec<(Option<Instant>, String)> = map
+        .keys()
+        .filter(|id| !protected.contains(*id))
+        .map(|id| {
+            let used = used.get(&to_page(id)).copied();
+            (used, id.clone())
+        })
+        .collect();
+    victims.sort();
+    for (_, id) in victims.into_iter().take(overflow) {
+        map.remove(&id);
+    }
 }
 
 #[cfg(test)]
@@ -9285,6 +9456,24 @@ mod tests {
         app
     }
 
+    fn seed_playlist(app: &mut App, id: &str) {
+        app.playlist_pages
+            .insert(id.to_string(), PlaylistPage::default());
+        app.open(Page::Playlist(id.to_string()));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    fn store_track(app: &mut App, id: &str) {
+        app.track_cache.insert(
+            id.to_string(),
+            Track {
+                id: Some(id.to_string()),
+                uri: format!("spotify:track:{id}"),
+                ..Track::default()
+            },
+        );
+    }
+
     #[test]
     fn two_toggle_play_actions_in_one_batch_return_to_playing() {
         let mut app = headless_app();
@@ -9304,6 +9493,130 @@ mod tests {
             app.now_playing().expect("playing").playing,
             "the second toggle must see the first pause, not the drawing snapshot"
         );
+    }
+
+    #[test]
+    fn page_cache_stays_bounded_when_history_is_long() {
+        let mut app = headless_app();
+        for i in 0..20 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        assert!(
+            app.playlist_pages.len() <= 12,
+            "history must not protect more pages than the cap: {}",
+            app.playlist_pages.len()
+        );
+        assert!(
+            app.playlist_pages.contains_key("pl19"),
+            "the open page stays"
+        );
+        assert!(
+            !app.playlist_pages.contains_key("pl0"),
+            "the oldest page is dropped"
+        );
+    }
+
+    #[test]
+    fn navigating_past_the_cache_limit_keeps_edits_until_every_write_and_snapshot_is_confirmed() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.playlist_pages.insert(
+            "edited".into(),
+            PlaylistPage {
+                playlist: Loadable::Loaded(Playlist {
+                    id: "edited".into(),
+                    snapshot_id: Some("old".into()),
+                    items_count: Some(TrackCount { total: 1 }),
+                    ..Default::default()
+                }),
+                items: PagedList {
+                    items: vec![cached_playlist_row("spotify:track:first")],
+                    total: Some(1),
+                    next_offset: None,
+                    loaded_once: true,
+                    ..Default::default()
+                },
+                cache_checked: true,
+                ..Default::default()
+            },
+        );
+        app.open(Page::Playlist("edited".into()));
+        for uri in ["spotify:track:second", "spotify:track:third"] {
+            app.apply(
+                Action::ConfirmAddToPlaylist {
+                    playlist_id: "edited".into(),
+                    playlist_name: "Edited".into(),
+                    items: vec![cached_playlist_row(uri).playable().unwrap().clone()],
+                },
+                &egui::Context::default(),
+            );
+        }
+        assert_eq!(app.playlist_pages["edited"].pending_writes, 2);
+        for i in 0..25 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        app.open(Page::Playlist("edited".into()));
+        let rows = |app: &App| {
+            app.playlist_pages["edited"]
+                .items
+                .items
+                .iter()
+                .filter_map(|item| item.playable().map(|item| item.uri().to_string()))
+                .collect::<Vec<_>>()
+        };
+        let expected = [
+            "spotify:track:first",
+            "spotify:track:second",
+            "spotify:track:third",
+        ];
+        assert_eq!(rows(&app), expected);
+        app.handle_api(ApiResponse::PlaylistItemsChanged {
+            id: "edited".into(),
+            message: String::new(),
+            result: Ok(Some("first-write".into())),
+        });
+        let generation = app.playlist_pages["edited"].generation;
+        let metadata = |snapshot: &str| ApiResponse::Playlist {
+            id: "edited".into(),
+            generation,
+            result: Ok(Playlist {
+                id: "edited".into(),
+                snapshot_id: Some(snapshot.into()),
+                items_count: Some(TrackCount { total: 3 }),
+                ..Default::default()
+            }),
+        };
+        app.handle_api(metadata("first-write"));
+        assert_eq!(app.playlist_pages["edited"].pending_writes, 1);
+        assert!(app.playlist_pages["edited"].optimistic_snapshot.is_none());
+        for i in 25..50 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        assert_eq!(rows(&app), expected, "one write is still pending");
+        app.handle_api(ApiResponse::PlaylistItemsChanged {
+            id: "edited".into(),
+            message: String::new(),
+            result: Ok(Some("second-write".into())),
+        });
+        app.handle_api(metadata("first-write"));
+        for i in 50..75 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        app.open(Page::Playlist("edited".into()));
+        assert_eq!(
+            rows(&app),
+            expected,
+            "lagging metadata cannot lose the edit"
+        );
+        app.handle_api(metadata("second-write"));
+        for i in 75..100 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        assert!(
+            !app.playlist_pages.contains_key("edited"),
+            "confirmed edits stop protecting an old page"
+        );
+        assert!(app.playlist_pages.len() <= 12);
     }
 
     #[test]
@@ -9340,6 +9653,48 @@ mod tests {
         assert_eq!(
             app.now_playing().expect("handoff").uri,
             "spotify:track:remote"
+        );
+    }
+
+    #[test]
+    fn going_back_refreshes_page_recency() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        for _ in 0..11 {
+            app.apply(Action::Back, &ctx);
+        }
+        assert_eq!(app.page(), &Page::Playlist("pl0".into()));
+        seed_playlist(&mut app, "pl12");
+        assert!(
+            app.playlist_pages.contains_key("pl0"),
+            "a playlist revisited through Back must not be the oldest"
+        );
+        assert!(
+            !app.playlist_pages.contains_key("pl11"),
+            "the page left behind by history is the one that goes"
+        );
+    }
+
+    #[test]
+    fn page_cache_trims_data_that_arrives_after_navigation() {
+        let mut app = headless_app();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        app.open(Page::Playlist("current".into()));
+        app.playlist_pages
+            .insert("current".into(), PlaylistPage::default());
+        app.playlist_pages
+            .insert("late".into(), PlaylistPage::default());
+        app.evict_stale_pages();
+        assert!(app.playlist_pages.len() <= 12);
+        assert!(app.playlist_pages.contains_key("current"));
+        assert!(
+            !app.playlist_pages.contains_key("late"),
+            "a page that arrived after browsing still counts toward the cap"
         );
     }
 
@@ -9391,6 +9746,145 @@ mod tests {
         assert_eq!(
             name, "Fresh",
             "reused revision 0 must not keep the old rows"
+        );
+    }
+
+    #[test]
+    fn track_cache_is_an_lru_of_eight_hundred() {
+        let mut app = headless_app();
+        for i in 0..900 {
+            store_track(&mut app, &format!("t{i}"));
+        }
+        for i in 100..900 {
+            let _ = app.read_cached_track(&format!("t{i}"));
+        }
+        app.evict_stale_pages();
+        assert_eq!(app.track_cache.len(), 800);
+        assert!(
+            app.track_cache.contains_key("t899"),
+            "a cache hit must keep that track"
+        );
+        assert!(!app.track_cache.contains_key("t0"));
+    }
+
+    #[test]
+    fn reset_data_clears_cache_recency() {
+        let mut app = headless_app();
+        seed_playlist(&mut app, "pl0");
+        store_track(&mut app, "t0");
+        let _ = app.read_cached_track("t0");
+        assert!(!app.page_used.is_empty());
+        assert!(!app.track_used.is_empty());
+        app.reset_data();
+        assert!(app.page_used.is_empty());
+        assert!(app.track_used.is_empty());
+    }
+
+    #[test]
+    fn stepping_resume_keeps_a_cached_preview() {
+        use crate::api::models::{PlayableItem, PlaylistItem, Track};
+        use crate::model::PagedList;
+        let row = |uri: &str| PlaylistItem {
+            item: Some(PlayableItem::Track(Track {
+                id: Some(uri.rsplit(':').next().unwrap().into()),
+                uri: uri.into(),
+                name: uri.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        store_track(&mut app, "one");
+        store_track(&mut app, "two");
+        for i in 0..798 {
+            store_track(&mut app, &format!("old{i}"));
+            let _ = app.read_cached_track(&format!("old{i}"));
+        }
+        app.playlist_pages.insert(
+            "pl1".into(),
+            PlaylistPage {
+                items: PagedList {
+                    items: vec![row("spotify:track:one"), row("spotify:track:two")],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.resume_context = Some("spotify:playlist:pl1".into());
+        app.resume_track = Some("spotify:track:one".into());
+        app.apply(Action::Next, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:two"));
+        store_track(&mut app, "overflow");
+        let _ = app.read_cached_track("overflow");
+        app.evict_stale_pages();
+        assert!(
+            app.track_cache.contains_key("two"),
+            "a cache hit while stepping resume must keep the song just previewed"
+        );
+        assert!(
+            !app.track_cache.contains_key("one"),
+            "the song left behind can go"
+        );
+    }
+
+    #[test]
+    fn requesting_a_cached_resume_track_keeps_it() {
+        let mut app = headless_app();
+        store_track(&mut app, "resume");
+        store_track(&mut app, "decoy");
+        for i in 0..798 {
+            store_track(&mut app, &format!("old{i}"));
+            let _ = app.read_cached_track(&format!("old{i}"));
+        }
+        app.resume_track = Some("spotify:track:resume".into());
+        app.request_resume_track();
+        store_track(&mut app, "overflow");
+        let _ = app.read_cached_track("overflow");
+        app.evict_stale_pages();
+        assert!(
+            app.track_cache.contains_key("resume"),
+            "a cache hit on the resume URI must keep that track"
+        );
+        assert!(
+            !app.track_cache.contains_key("decoy"),
+            "an untouched cached track can go"
+        );
+    }
+
+    #[test]
+    fn evict_stale_pages_drops_table_row_copies() {
+        let mut app = headless_app();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        crate::ui::collection::cached_table_items(
+            &mut app,
+            Page::Playlist("pl0".into()),
+            0,
+            0,
+            0,
+            || {
+                vec![(
+                    PlayableItem::Track(Track {
+                        name: "Old".into(),
+                        uri: "spotify:track:old".into(),
+                        ..Track::default()
+                    }),
+                    None,
+                    None,
+                )]
+            },
+        );
+        assert!(app.table_rows.contains_key(&Page::Playlist("pl0".into())));
+        seed_playlist(&mut app, "pl12");
+        assert!(
+            !app.playlist_pages.contains_key("pl0"),
+            "the oldest playlist page is dropped"
+        );
+        assert!(
+            !app.table_rows.contains_key(&Page::Playlist("pl0".into())),
+            "its table-row copy must go with it"
         );
     }
 

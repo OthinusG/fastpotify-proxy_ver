@@ -98,6 +98,14 @@ The last good playlist folder tree is kept in `session.json`, scoped to the
 account that supplied it. This keeps folders visible when local playback is
 temporarily unavailable. Live session data is still required for edit grants.
 
+On `main`, for the release after 0.7.1, memory caches retain the open page,
+the playing context, and a limited set of recently used playlist, album,
+artist, and show pages. Older pages reload when revisited, using the saved
+playlist prefix when its snapshot still matches. Pending playlist edits and
+their rows stay in memory until the write and its snapshot are confirmed,
+even if this temporarily exceeds the usual page limit. Track metadata is
+limited to 800 cached tracks; navigation and periodic cleanup trim old entries.
+
 The session remembers separate positions for the main window and the Winamp
 mini player. The shade modes are kept in `settings.json`. Wayland compositors
 may ignore saved positions. On Windows, a position
