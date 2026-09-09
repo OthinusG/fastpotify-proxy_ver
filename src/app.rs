@@ -1046,19 +1046,15 @@ impl App {
                 .rsplit(':')
                 .next()
                 .and_then(|id| self.track_cache.get(id));
-            let artists = cached
-                .map(|cached| cached.artists.clone())
-                .unwrap_or_else(|| {
-                    track
-                        .artists
-                        .iter()
-                        .map(|name| ArtistRef {
-                            id: None,
-                            name: name.clone(),
-                            uri: None,
-                        })
-                        .collect()
-                });
+            // Playback already carries artist IDs. Keep those links available
+            // while the Web API is loading (or its cached credits have no IDs).
+            let artists = if track.artists.iter().any(|artist| artist.id.is_some()) {
+                track.artists.clone()
+            } else {
+                cached
+                    .map(|cached| cached.artists.clone())
+                    .unwrap_or_else(|| track.artists.clone())
+            };
             let playing = match self.optimistic_playing {
                 Some((playing, at)) if at.elapsed() < PLAYBACK_HOLD => playing,
                 _ => self.local.playback == Playback::Playing,
@@ -10991,7 +10987,10 @@ mod tests {
             track: Some(crate::player::LocalTrack {
                 uri: "spotify:track:t1".to_owned(),
                 title: "Go".to_owned(),
-                artists: vec!["The Band".to_owned()],
+                artists: vec![ArtistRef {
+                    name: "The Band".to_owned(),
+                    ..ArtistRef::default()
+                }],
                 album: "First".to_owned(),
                 art_url: Some("https://i.scdn.co/image/abc".to_owned()),
                 duration_ms: 200_000,

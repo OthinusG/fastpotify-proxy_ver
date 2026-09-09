@@ -27,6 +27,10 @@ consent dialog. The playback session uses the account ID verified by either
 Web API grant. A verified personal app can complete sign-in while the shared
 app's verification is still waiting.
 
+On `main`, for the release after 0.7.1, local playback retains the artist IDs
+already supplied by librespot. Artist links in the player bar work before the
+Web API's track metadata arrives, without an extra request.
+
 On `main`, for the release after 0.7.1, requests that need a grant still being
 verified wait for it instead of showing "not signed in". Sign-out cancels
 pending requests, and their late results cannot undo a new sign-in. If Spotify

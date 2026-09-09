@@ -73,6 +73,9 @@ You can rename it in Settings.
   this computer fades in or out to avoid a hard cut. Gapless transitions
   between songs and playback on another device are unchanged.
 - **Play buttons show progress.** The button spins until Spotify responds.
+- **Artist names are links.** Click a credited artist in the player bar to
+  open their page. On `main`, for the release after 0.7.1, local playback
+  preserves these links before Web API metadata arrives.
 - **Common actions have shortcuts.** Space plays and pauses, Ctrl+F or `/`
   searches, and `Q` opens the queue. Ctrl+/ shows the full list.
 - **Rows and cards have context menus.** Right-click a song, playlist, album,

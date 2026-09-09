@@ -1619,6 +1619,72 @@ mod tests {
         view_frame(ctx, app, events, crate::ui::search::show)
     }
 
+    #[test]
+    fn playing_artist_links_work_before_web_metadata_and_after_focus_returns() {
+        use crate::player::{LocalState, LocalTrack, Playback};
+
+        let (ctx, mut app) = accessible_app("playing-artist-links");
+        let artists = vec![
+            ArtistRef {
+                id: Some("first".into()),
+                name: "Tyler, the Creator".into(),
+                uri: Some("spotify:artist:first".into()),
+            },
+            ArtistRef {
+                id: Some("guest".into()),
+                name: "Guest".into(),
+                uri: Some("spotify:artist:guest".into()),
+            },
+        ];
+        app.local = LocalState {
+            playback: Playback::Playing,
+            track: Some(LocalTrack {
+                uri: "spotify:track:uncached".into(),
+                title: "Song".into(),
+                artists: artists.clone(),
+                duration_ms: 200_000,
+                ..LocalTrack::default()
+            }),
+            ..LocalState::default()
+        };
+        app.track_cache.clear();
+        let view = crate::ui::player_bar::show;
+        for cached in [false, true] {
+            if cached {
+                // A partial response must not turn working links back into text.
+                app.track_cache.insert("uncached".into(), Track::default());
+            }
+            view_frame(&ctx, &mut app, vec![], view);
+            let text = view_frame(&ctx, &mut app, vec![], view);
+            for artist in &artists {
+                let pos = text
+                    .iter()
+                    .find(|(text, _)| text == &artist.name)
+                    .unwrap()
+                    .1
+                    .center();
+                app.actions.clear();
+                view_frame(
+                    &ctx,
+                    &mut app,
+                    pointer_click(pos, egui::PointerButton::Primary),
+                    view,
+                );
+                assert!(
+                    matches!(app.actions.as_slice(), [Action::Open(Page::Artist(id))] if Some(id) == artist.id.as_ref())
+                );
+            }
+            view_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::WindowFocused(false), egui::Event::PointerGone],
+                view,
+            );
+            view_frame(&ctx, &mut app, vec![egui::Event::WindowFocused(true)], view);
+        }
+        app.backend.shutdown();
+    }
+
     fn view_frame(
         ctx: &egui::Context,
         app: &mut App,

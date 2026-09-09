@@ -33,6 +33,7 @@ use librespot_playback::{
 };
 use sha1::{Digest, Sha1};
 
+use crate::api::models::ArtistRef;
 use crate::sink::{AudioControl, ErrorHook, RodioSink};
 use crate::vis::{AudioTap, Tapped};
 
@@ -139,7 +140,7 @@ impl RepeatMode {
 pub struct LocalTrack {
     pub uri: String,
     pub title: String,
-    pub artists: Vec<String>,
+    pub artists: Vec<ArtistRef>,
     pub album: String,
     pub art_url: Option<String>,
     pub art_small_url: Option<String>,
@@ -149,7 +150,7 @@ pub struct LocalTrack {
 
 impl LocalTrack {
     pub fn artist_names(&self) -> String {
-        self.artists.join(", ")
+        crate::api::models::join_names(self.artists.iter().map(|artist| artist.name.as_str()))
     }
 }
 
@@ -801,15 +802,39 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
 fn local_track(item: &AudioItem) -> LocalTrack {
     let (artists, album, is_episode) = match &item.unique_fields {
         UniqueFields::Track { artists, album, .. } => (
-            artists.iter().map(|artist| artist.name.clone()).collect(),
+            artists
+                .iter()
+                .map(|artist| {
+                    let uri = artist.id.to_uri().ok();
+                    ArtistRef {
+                        id: uri
+                            .as_deref()
+                            .and_then(crate::util::uri_id)
+                            .map(str::to_string),
+                        name: artist.name.clone(),
+                        uri,
+                    }
+                })
+                .collect(),
             album.clone(),
             false,
         ),
-        UniqueFields::Episode { show_name, .. } => {
-            (vec![show_name.clone()], show_name.clone(), true)
-        }
+        UniqueFields::Episode { show_name, .. } => (
+            vec![ArtistRef {
+                name: show_name.clone(),
+                ..ArtistRef::default()
+            }],
+            show_name.clone(),
+            true,
+        ),
         UniqueFields::Local { artists, album, .. } => (
-            artists.iter().cloned().collect(),
+            artists
+                .iter()
+                .map(|name| ArtistRef {
+                    name: name.clone(),
+                    ..ArtistRef::default()
+                })
+                .collect(),
             album.clone().unwrap_or_default(),
             false,
         ),
@@ -943,6 +968,57 @@ fn decode_folder_name(encoded: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn playback_metadata_preserves_each_artist_id_and_name() {
+        use librespot_metadata::artist::{ArtistWithRole, ArtistsWithRole};
+
+        let credits = [
+            (
+                "spotify:artist:0000000000000000000001",
+                "Tyler, the Creator",
+            ),
+            ("spotify:artist:0000000000000000000002", "Guest"),
+        ];
+        let item = AudioItem {
+            track_id: uri(),
+            uri: uri().to_uri().unwrap(),
+            files: Default::default(),
+            name: "Song".into(),
+            covers: vec![],
+            language: vec![],
+            duration_ms: 200_000,
+            is_explicit: false,
+            availability: Ok(()),
+            alternatives: None,
+            unique_fields: UniqueFields::Track {
+                artists: ArtistsWithRole(
+                    credits
+                        .iter()
+                        .map(|(uri, name)| ArtistWithRole {
+                            id: librespot_core::SpotifyUri::from_uri(uri).unwrap(),
+                            name: (*name).into(),
+                            role: Default::default(),
+                        })
+                        .collect(),
+                ),
+                album: "Album".into(),
+                album_artists: vec![],
+                popularity: 0,
+                number: 1,
+                disc_number: 1,
+            },
+        };
+
+        let track = local_track(&item);
+        assert_eq!(track.artist_names(), "Tyler, the Creator, Guest");
+        assert_eq!(track.artists.len(), 2);
+        for (artist, (uri, name)) in track.artists.iter().zip(credits) {
+            assert_eq!(artist.id.as_deref(), crate::util::uri_id(uri));
+            assert_eq!(artist.uri.as_deref(), Some(uri));
+            assert_eq!(artist.name, name);
+        }
+    }
+
     #[test]
     fn the_rootlist_markers_become_folders() {
         let uris: Vec<String> = [

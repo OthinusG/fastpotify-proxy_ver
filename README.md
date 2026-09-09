@@ -41,6 +41,8 @@ everyday use, and connection details.
 - **Artist pages** with popular songs, a filterable discography, and related
   artists. **Album**, **playlist**, and **podcast** pages support playback
   from any row.
+  Artist names in the player bar open their pages, including during local
+  playback before Web API metadata arrives (on `main`, after 0.7.1).
 - **Edit your playlists.** Create, rename, describe, reorder, and delete them.
   Add songs from a row menu, or drag a row or the currently playing song to a
   playlist in the sidebar. A playlist a friend shared with you takes songs too,
