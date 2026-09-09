@@ -18,6 +18,18 @@ closer to the edge and stops when you move away or release the mouse. This
 lets you move a song from the end to the beginning without dropping it along
 the way. Clear filters and sorting before reordering playlist songs.
 
+On `main`, after 0.7.1, drag a song from the player bar, the queue, or another
+list into an open editable playlist. The line between rows marks its insertion
+position. Dropping below the last row appends; the blank area of an empty
+playlist accepts its first song. The source song stays in its list or queue,
+and playback continues unchanged. Dragging a row within the same playlist
+still moves that row.
+
+Clear any playlist filter or sort before placing songs between rows, so the
+visible positions match Spotify's order. A duplicate confirmation keeps the
+chosen position when you select **Add anyway**. Dragging near the top or bottom
+of the playlist scrolls to positions beyond the visible rows.
+
 The Library sidebar also scrolls near its edges when you drag a song toward a
 playlist or reorder its entries. Only the list under the pointer scrolls.
 

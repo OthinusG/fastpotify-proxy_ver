@@ -130,11 +130,13 @@ pub enum ApiRequest {
         playlist_id: String,
         playlist_name: String,
         items: Vec<PlayableItem>,
+        position: Option<u32>,
     },
     AddToPlaylist {
         playlist_id: String,
         playlist_name: String,
         uris: Vec<String>,
+        position: Option<u32>,
     },
     RemoveFromPlaylist {
         playlist_id: String,
@@ -323,6 +325,7 @@ pub enum ApiResponse {
         playlist_id: String,
         playlist_name: String,
         items: Vec<PlayableItem>,
+        position: Option<u32>,
         result: ApiResult<Vec<String>>,
     },
     PlaylistItemsChanged {
@@ -650,6 +653,8 @@ pub struct Backend {
     playlist_item_requests: std::sync::Mutex<Vec<(String, u32, u64)>>,
     #[cfg(test)]
     playlist_sample_requests: std::sync::Mutex<Vec<(String, u32, u64)>>,
+    #[cfg(test)]
+    playlist_add_requests: std::sync::Mutex<Vec<ApiRequest>>,
 }
 
 impl Backend {
@@ -715,6 +720,8 @@ impl Backend {
             playlist_item_requests: std::sync::Mutex::new(Vec::new()),
             #[cfg(test)]
             playlist_sample_requests: std::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            playlist_add_requests: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -738,6 +745,16 @@ impl Backend {
     }
 
     pub fn api(&self, request: ApiRequest) {
+        #[cfg(test)]
+        if matches!(
+            request,
+            ApiRequest::AddToPlaylist { .. } | ApiRequest::CheckPlaylistDuplicates { .. }
+        ) {
+            self.playlist_add_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(request.clone());
+        }
         #[cfg(test)]
         if let ApiRequest::PlaylistItems {
             id,
@@ -780,6 +797,16 @@ impl Backend {
         std::mem::take(
             &mut *self
                 .playlist_sample_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn take_playlist_add_requests(&self) -> Vec<ApiRequest> {
+        std::mem::take(
+            &mut *self
+                .playlist_add_requests
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
         )
@@ -2366,6 +2393,7 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             playlist_id,
             playlist_name,
             items,
+            position,
         } => {
             let uris: Vec<String> = items.iter().map(|item| item.uri().to_string()).collect();
             ApiResponse::PlaylistDuplicatesChecked {
@@ -2373,14 +2401,16 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
                 playlist_id,
                 playlist_name,
                 items,
+                position,
             }
         }
         ApiRequest::AddToPlaylist {
             playlist_id,
             playlist_name,
             uris,
+            position,
         } => ApiResponse::PlaylistItemsChanged {
-            result: routed!(add_playlist_items(&playlist_id, &uris, None)),
+            result: routed!(add_playlist_items(&playlist_id, &uris, position)),
             id: playlist_id,
             message: format!("Added to {playlist_name}"),
         },

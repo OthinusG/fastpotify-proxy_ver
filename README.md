@@ -52,7 +52,12 @@ everyday use, and connection details.
   edge to scroll to rows beyond the screen. The Library sidebar scrolls while
   dragging toward offscreen playlists too.
   Add songs from a row menu, or drag a row or the currently playing song to a
-  playlist in the sidebar. A playlist a friend shared with you takes songs too,
+  playlist in the sidebar. On `main`, after 0.7.1, drop a song from the player
+  bar, queue, or another list between rows of an open editable playlist to
+  insert it there. This adds a copy and leaves playback and the queue unchanged.
+  Clear the playlist’s filter and sort to choose an insertion position.
+  Drop it on an empty playlist to add its first song.
+  A playlist a friend shared with you takes songs too,
   as Spotify's own apps allow. Filter the **Add to playlist** menu by name to
   find the destination quickly.
 - **Opens Spotify links.** Fastpotify registers for `spotify:` links, so a

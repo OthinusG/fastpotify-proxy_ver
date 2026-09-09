@@ -93,7 +93,11 @@ comes from Spotify; trying again later may work.
 Before adding songs to an existing playlist, Fastpotify checks the rows it
 already holds. A known duplicate produces an immediate confirmation naming the
 song. Only a playlist that has not been fully loaded needs a background scan to
-rule out duplicates. Once confirmed, the new rows appear locally at once. A
+rule out duplicates. Once confirmed, the new rows appear locally at once.
+On `main`, after 0.7.1,
+a drop into an open editable playlist sends its chosen insertion position
+through the same Web API grant. Duplicate checks and confirmation retain that
+position; partial loaded pages keep the correct continuation offset. A
 successful write advances the cached playlist to Spotify's returned snapshot
 instead of downloading the playlist again. If Spotify cannot answer the scan,
 Fastpotify preserves the requested edit and lets the write report its result.

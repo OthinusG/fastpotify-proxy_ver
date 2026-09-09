@@ -101,6 +101,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     playlist_id,
                     playlist_name,
                     items,
+                    position,
                     duplicate_uris,
                 } => {
                     let multiple = items.len() > 1;
@@ -131,6 +132,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 playlist_id: playlist_id.clone(),
                                 playlist_name: playlist_name.clone(),
                                 items: items.clone(),
+                                position,
                             });
                         }
                         if theme::pill_button(ui, &palette, "Cancel", false).clicked() {

@@ -680,6 +680,7 @@ pub enum Dialog {
         playlist_id: String,
         playlist_name: String,
         items: Vec<PlayableItem>,
+        position: Option<u32>,
         duplicate_uris: Vec<String>,
     },
     Shortcuts,
@@ -762,10 +763,17 @@ pub enum Action {
         playlist_name: String,
         items: Vec<PlayableItem>,
     },
+    /// Copy a dragged song into an open playlist at an absolute position.
+    InsertInPlaylist {
+        playlist_id: String,
+        position: u32,
+        item: Box<PlayableItem>,
+    },
     ConfirmAddToPlaylist {
         playlist_id: String,
         playlist_name: String,
         items: Vec<PlayableItem>,
+        position: Option<u32>,
     },
     RemoveFromPlaylist {
         playlist_id: String,

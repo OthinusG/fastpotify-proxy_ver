@@ -502,7 +502,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         table.context.clone()
     };
     let sorted = sort.is_some();
-    // Allow playlist reordering only when displayed rows match server order.
+    // Positional playlist edits require the displayed rows to match server order.
     let move_playlist = (sort.is_none() && needle.is_empty())
         .then(|| match &table.context {
             RowContext::Context {
@@ -512,20 +512,15 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             _ => None,
         })
         .flatten();
-    if move_playlist.as_ref().is_some_and(|playlist_id| {
-        egui::DragAndDrop::payload::<DragTrack>(ui.ctx())
-            .and_then(|track| track.from.as_ref().map(|(origin, _)| origin == playlist_id))
-            .unwrap_or(false)
-    }) {
+    if move_playlist.is_some() && egui::DragAndDrop::has_payload_of_type::<DragTrack>(ui.ctx()) {
         widgets::scroll_during_drag(ui);
     }
     // Calculate the nearest drop slot from fixed row height because virtualized
     // rows are not all available during drawing.
     let list_top = ui.cursor().top();
-    let move_slot = move_playlist.as_ref().and_then(|playlist_id| {
-        let track = egui::DragAndDrop::payload::<DragTrack>(ui.ctx())?;
-        let (origin, _) = track.from.as_ref()?;
-        if origin != playlist_id {
+    let move_slot = move_playlist.as_ref().and_then(|_| {
+        egui::DragAndDrop::payload::<DragTrack>(ui.ctx())?;
+        if !ui.rect_contains_pointer(ui.clip_rect()) {
             return None;
         }
         let pos = ui
@@ -533,8 +528,9 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             .pointer_latest_pos()
             .filter(|pos| ui.clip_rect().contains(*pos))?;
         let row = (pos.y - list_top) / row_height;
-        (row >= 0.0 && row <= entry.visible.len() as f32)
-            .then(|| (row.round() as usize).min(entry.visible.len()))
+        // The blank space after the final row accepts an append, including
+        // the empty-playlist state, where there is no existing row to hit.
+        (row >= 0.0).then(|| (row.round() as usize).min(entry.visible.len()))
     });
     // Selection uses display indices. Clear it when sorting, filtering, or row
     // count changes.
@@ -603,20 +599,29 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             y,
             egui::Stroke::new(2.0, palette.accent),
         );
-        // Accept only a drag payload from this playlist.
-        if ui.input(|input| input.pointer.any_released())
+        if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary))
             && let Some(track) = egui::DragAndDrop::take_payload::<DragTrack>(ui.ctx())
-            && let Some((playlist_id, from)) = track.from.clone()
+            && let Some(playlist_id) = move_playlist
         {
             let to = table.row_offset.saturating_add(slot as u32);
             // The slot is Spotify's insert_before, exactly what the
             // action's handler sends; a row dropped back on its own
             // edges moves nothing.
-            if to != from && to != from + 1 {
-                app.actions.push(Action::MoveInPlaylist {
+            if let Some((origin, from)) = &track.from
+                && *origin == playlist_id
+            {
+                if to != *from && to != from.saturating_add(1) {
+                    app.actions.push(Action::MoveInPlaylist {
+                        playlist_id,
+                        from: *from,
+                        to,
+                    });
+                }
+            } else {
+                app.actions.push(Action::InsertInPlaylist {
                     playlist_id,
-                    from,
-                    to,
+                    position: to,
+                    item: Box::new(track.item.clone()),
                 });
             }
         }
