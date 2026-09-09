@@ -149,6 +149,7 @@ pub enum ApiRequest {
     },
     SavedTracks {
         offset: u32,
+        generation: u64,
     },
     SavedAlbums {
         offset: u32,
@@ -332,6 +333,8 @@ pub enum ApiResponse {
     },
     SavedTracks {
         offset: u32,
+        generation: u64,
+        account_id: Option<String>,
         result: ApiResult<Page<SavedTrack>>,
     },
     SavedAlbums {
@@ -501,6 +504,10 @@ pub enum Command {
     },
     /// Resolve user ids to display names through the streaming session.
     UserNames(Vec<String>),
+    LoadLikedSongsCache {
+        generation: u64,
+    },
+    StoreLikedSongsCache(crate::liked::Cache),
 }
 
 pub struct LyricsRequest {
@@ -555,6 +562,11 @@ pub enum Event {
     /// The verified personal Web API app, or `None` when it is disabled.
     WebApp {
         client_id: Option<String>,
+    },
+    LikedSongsCache {
+        account_id: String,
+        generation: u64,
+        cache: Option<crate::liked::Cache>,
     },
 }
 
@@ -927,6 +939,35 @@ impl Worker {
                         .await
                 }
                 Command::UserNames(ids) => self.fetch_user_names(ids),
+                Command::LoadLikedSongsCache { generation } => {
+                    if let Some(account) = self.api.account() {
+                        let account_id = account.as_str().to_string();
+                        let path = self.dirs.liked_songs_cache_file(&account_id);
+                        let events = self.events.clone();
+                        let waker = self.waker.clone();
+                        tokio::spawn(async move {
+                            let cache = crate::liked::read(&path, &account_id).await;
+                            let _ = events.send(Event::LikedSongsCache {
+                                account_id,
+                                generation,
+                                cache,
+                            });
+                            waker.wake();
+                        });
+                    }
+                }
+                Command::StoreLikedSongsCache(cache) => {
+                    if self
+                        .api
+                        .account()
+                        .is_some_and(|account| account.as_str() == cache.account_id)
+                    {
+                        let path = self.dirs.liked_songs_cache_file(&cache.account_id);
+                        if let Err(error) = crate::liked::write(&path, &cache).await {
+                            log::warn!("unable to store Liked Songs cache: {error}");
+                        }
+                    }
+                }
                 Command::ConfigurePersonalWebApp(client_id) => {
                     self.configure_personal_web_app(client_id)
                 }
@@ -2043,8 +2084,10 @@ async fn handle(api: &ApiGateway, request: ApiRequest) -> (ApiResponse, Option<A
             id,
             followed: follow,
         },
-        ApiRequest::SavedTracks { offset } => ApiResponse::SavedTracks {
+        ApiRequest::SavedTracks { offset, generation } => ApiResponse::SavedTracks {
             offset,
+            generation,
+            account_id: api.account().map(|account| account.as_str().to_string()),
             result: routed!(saved_tracks(offset, 50)),
         },
         ApiRequest::SavedAlbums { offset } => ApiResponse::SavedAlbums {

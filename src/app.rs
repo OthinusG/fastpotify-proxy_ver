@@ -251,6 +251,8 @@ pub struct App {
     window_title: String,
 
     pub library: Library,
+    liked_songs: crate::liked::LikedSongs,
+    liked_recheck_at: Option<Instant>,
     pub home: HomeData,
     /// Local play history. See [`crate::history`].
     pub plays: crate::history::History,
@@ -559,6 +561,8 @@ impl App {
             queue_shuffle_pending: None,
             window_title: String::new(),
             library: Library::default(),
+            liked_songs: crate::liked::LikedSongs::default(),
+            liked_recheck_at: None,
             home: HomeData::default(),
             plays,
             listening: None,
@@ -1346,6 +1350,13 @@ impl App {
                     self.try_adopt_playlist_cache(&id);
                     self.checkpoint_playlist_cache(&id);
                 }
+                Event::LikedSongsCache {
+                    account_id,
+                    generation,
+                    cache,
+                } => {
+                    self.receive_liked_cache(&account_id, generation, cache);
+                }
                 Event::UserName { id, name } => {
                     self.set_user_name(id, name);
                 }
@@ -1441,6 +1452,8 @@ impl App {
 
     fn reset_data(&mut self) {
         self.library = Library::default();
+        self.liked_songs = crate::liked::LikedSongs::default();
+        self.liked_recheck_at = None;
         self.home = HomeData::default();
         self.playlist_pages.clear();
         self.album_pages.clear();
@@ -2063,6 +2076,17 @@ impl App {
             {
                 self.refresh_queue(false);
             }
+            if let Some(due) = self.liked_recheck_at {
+                if Instant::now() >= due && !self.liked_songs.refreshing() {
+                    self.liked_recheck_at = None;
+                    self.refresh_liked_songs();
+                } else {
+                    ctx.request_repaint_after(
+                        due.saturating_duration_since(Instant::now())
+                            .max(Duration::from_millis(100)),
+                    );
+                }
+            }
             if let Some(due) = self.queue_recheck_at {
                 if Instant::now() >= due {
                     self.queue_recheck_at = None;
@@ -2588,11 +2612,7 @@ impl App {
             Page::Home => self.load_home(false),
             Page::TopSongs => self.load_top_songs(false),
             Page::Search => {}
-            Page::LikedSongs => {
-                if !self.library.liked.loaded_once {
-                    self.load_more(Page::LikedSongs);
-                }
-            }
+            Page::LikedSongs => self.ensure_liked_songs(),
             Page::Albums => {
                 if !self.library.albums.loaded_once {
                     self.load_more(Page::Albums);
@@ -2819,10 +2839,14 @@ impl App {
     pub fn load_more(&mut self, page: Page) {
         match page {
             Page::LikedSongs => {
-                let list = &mut self.library.liked;
-                if let Some(offset) = list.next_offset.filter(|_| list.can_load_more()) {
-                    list.loading = true;
-                    self.backend.api(ApiRequest::SavedTracks { offset });
+                if !self.liked_songs.cache_checked {
+                    self.ensure_liked_songs();
+                } else if let Some(offset) = self.liked_songs.request_offset() {
+                    self.backend.api(ApiRequest::SavedTracks {
+                        offset,
+                        generation: self.liked_songs.generation,
+                    });
+                    self.library.liked.loading = true;
                 }
             }
             Page::Albums => {
@@ -2951,7 +2975,10 @@ impl App {
         match &page {
             Page::Home => self.load_home(true),
             Page::TopSongs => self.load_top_songs(true),
-            Page::LikedSongs => self.library.liked.reset(),
+            Page::LikedSongs => {
+                self.refresh_liked_songs();
+                return;
+            }
             Page::Albums => self.library.albums.reset(),
             Page::Artists => self.library.artists.reset(),
             Page::Podcasts => self.library.shows.reset(),
@@ -4030,22 +4057,43 @@ impl App {
                     self.toast_error(format!("Couldn't update the playlist: {error}"));
                 }
             },
-            ApiResponse::SavedTracks { offset, result } => {
+            ApiResponse::SavedTracks {
+                offset,
+                generation,
+                account_id,
+                result,
+            } => {
+                if generation != self.liked_songs.generation
+                    || self.user_id() != account_id.as_deref()
+                {
+                    return;
+                }
+                let mut more = false;
+                let succeeded = result.is_ok();
                 match result {
                     Ok(page) => {
                         for item in &page.items {
                             let uri = item.track.uri.clone();
                             self.remember_track_recording(&item.track);
-                            if !self.saved_writes.contains_key(&uri) {
+                            if !self.saved_writes.contains_key(&uri)
+                                && self.liked_songs.intent(&uri).is_none()
+                            {
                                 self.set_saved_state(uri, true);
                             }
                         }
-                        self.library.liked.absorb(offset, page);
+                        more = self.liked_songs.absorb(
+                            offset,
+                            page,
+                            jiff::Timestamp::now().as_second(),
+                        );
                     }
-                    Err(error) => self.library.liked.fail(error.to_string()),
+                    Err(error) => self.liked_songs.fail(error.to_string()),
                 }
-                // A sorted table means the whole list, not the loaded part.
-                if self.table_sorts.contains_key(&Page::LikedSongs) {
+                if !more {
+                    self.sync_liked_songs();
+                    self.checkpoint_liked_songs(false);
+                }
+                if succeeded && (more || self.table_sorts.contains_key(&Page::LikedSongs)) {
                     self.load_more(Page::LikedSongs);
                 }
             }
@@ -4123,25 +4171,12 @@ impl App {
                             self.set_saved_state(uri.clone(), saved);
                             match util::uri_kind(uri) {
                                 Some("track") => {
-                                    if self.library.liked.loaded_once {
-                                        if saved {
-                                            let total = self
-                                                .library
-                                                .liked
-                                                .total
-                                                .map(|total| total.saturating_add(1));
-                                            self.library.liked.reset();
-                                            self.library.liked.total = total;
-                                            if matches!(self.page(), Page::LikedSongs) {
-                                                self.load_more(Page::LikedSongs);
-                                            }
-                                        } else {
-                                            self.library
-                                                .liked
-                                                .retain(|item| item.track.uri != *uri);
-                                            if let Some(total) = self.library.liked.total.as_mut() {
-                                                *total = total.saturating_sub(1);
-                                            }
+                                    if self.liked_songs.intent(uri).is_some() {
+                                        self.liked_songs.confirm(uri, saved, true);
+                                    } else if !saved {
+                                        self.library.liked.retain(|item| item.track.uri != *uri);
+                                        if let Some(total) = self.library.liked.total.as_mut() {
+                                            *total = total.saturating_sub(1);
                                         }
                                     }
                                 }
@@ -4170,11 +4205,17 @@ impl App {
                     Err(error) => {
                         for uri in &current_uris {
                             self.set_saved_state(uri.clone(), !saved);
+                            self.liked_songs.confirm(uri, saved, false);
                         }
                         if !current_uris.is_empty() {
                             self.toast_error(format!("Couldn't update your library: {error}"));
                         }
                     }
+                }
+                if self.liked_songs.cache_checked && self.liked_songs.has_confirmed_changes() {
+                    self.sync_liked_songs();
+                    self.checkpoint_liked_songs(true);
+                    self.liked_recheck_at = Some(Instant::now() + Duration::from_secs(5));
                 }
             }
             ApiResponse::Contains { uris, result } => {
@@ -4183,7 +4224,9 @@ impl App {
                 }
                 if let Ok(flags) = result {
                     for (uri, flag) in uris.into_iter().zip(flags) {
-                        if !self.saved_writes.contains_key(&uri) {
+                        if !self.saved_writes.contains_key(&uri)
+                            && self.liked_songs.intent(&uri).is_none()
+                        {
                             self.set_saved_state(uri, flag);
                         }
                     }
@@ -4333,6 +4376,9 @@ impl App {
                     Ok(track) => {
                         self.remember_track_recording(&track);
                         self.request_recording_candidates(&track);
+                        if self.liked_songs.update_track(&track) {
+                            self.sync_liked_songs();
+                        }
                         self.track_cache.insert(id, track);
                     }
                     Err(error) => {
@@ -5459,6 +5505,10 @@ impl App {
         }
         self.set_saved_state(uri.clone(), saved);
         self.saved_writes.insert(uri.clone(), saved);
+        if self.change_liked_song(&uri, saved) {
+            self.sync_liked_songs();
+            self.ensure_liked_songs();
+        }
         self.backend.api(ApiRequest::SetSaved {
             uris: vec![uri],
             saved,
@@ -5685,9 +5735,15 @@ impl App {
                 });
             }
             Action::SetSavedMany { uris, saved } => {
+                let mut changed_tracks = false;
                 for uri in &uris {
                     self.set_saved_state(uri.clone(), saved);
                     self.saved_writes.insert(uri.clone(), saved);
+                    changed_tracks |= self.change_liked_song(uri, saved);
+                }
+                if changed_tracks {
+                    self.sync_liked_songs();
+                    self.ensure_liked_songs();
                 }
                 if !uris.is_empty() {
                     self.backend.api(ApiRequest::SetSaved { uris, saved });
@@ -6668,6 +6724,151 @@ impl App {
     pub fn shutdown(&mut self) {
         self.save_state();
         self.backend.shutdown();
+    }
+}
+
+impl App {
+    fn ensure_liked_songs(&mut self) {
+        if self.liked_songs.cache_loading || self.liked_songs.refreshing() {
+            return;
+        }
+        if !self.liked_songs.cache_checked {
+            if self.user_id().is_none() {
+                return;
+            }
+            self.load_generation = self.load_generation.wrapping_add(1);
+            self.liked_songs.generation = self.load_generation;
+            self.liked_songs.cache_loading = true;
+            self.library.liked.loading = true;
+            self.backend.send(Command::LoadLikedSongsCache {
+                generation: self.load_generation,
+            });
+        } else if !self.liked_songs.fresh(jiff::Timestamp::now().as_second())
+            && self.library.liked.error.is_none()
+        {
+            self.refresh_liked_songs();
+        }
+    }
+
+    fn receive_liked_cache(
+        &mut self,
+        account: &str,
+        generation: u64,
+        cache: Option<crate::liked::Cache>,
+    ) {
+        if self.user_id() != Some(account)
+            || self.liked_songs.generation != generation
+            || self.liked_songs.cache_checked
+        {
+            return;
+        }
+        self.liked_songs.cache_loading = false;
+        self.liked_songs.cache_checked = true;
+        if let Some(cache) = cache.filter(|cache| cache.valid_for(account)) {
+            self.liked_songs.restore(cache);
+        }
+        self.sync_liked_songs();
+        for item in &self.library.liked.items {
+            let uri = &item.track.uri;
+            if !self.saved_writes.contains_key(uri) && self.liked_songs.intent(uri).is_none() {
+                self.saved.insert(uri.clone(), true);
+                if let Some(key) = item.track.recording_key() {
+                    self.track_recordings.insert(uri.clone(), key.clone());
+                    self.saved_recordings.insert(key);
+                }
+            }
+        }
+        if !self.liked_songs.fresh(jiff::Timestamp::now().as_second())
+            || self.liked_songs.has_confirmed_changes()
+        {
+            self.refresh_liked_songs();
+        } else if self.table_sorts.contains_key(&Page::LikedSongs) {
+            self.load_more(Page::LikedSongs);
+        }
+    }
+
+    fn refresh_liked_songs(&mut self) {
+        if !self.liked_songs.cache_checked {
+            self.ensure_liked_songs();
+            return;
+        }
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.liked_songs.start_refresh(self.load_generation);
+        self.library.liked.loading = true;
+        self.load_more(Page::LikedSongs);
+    }
+
+    fn sync_liked_songs(&mut self) {
+        self.liked_songs.sync_view(&mut self.library.liked);
+        for (uri, saved) in self.liked_songs.intents() {
+            self.set_saved_state(uri, saved);
+        }
+    }
+
+    fn checkpoint_liked_songs(&mut self, force: bool) {
+        if let Some(account) = self.user_id().map(str::to_owned)
+            && let Some(cache) = self.liked_songs.checkpoint(account, force)
+        {
+            self.backend.send(Command::StoreLikedSongsCache(cache));
+        }
+    }
+
+    fn change_liked_song(&mut self, uri: &str, saved: bool) -> bool {
+        let Some(id) = uri.strip_prefix("spotify:track:") else {
+            return false;
+        };
+        self.liked_songs.seed(&self.library.liked);
+        let track = self
+            .track_cache
+            .get(id)
+            .cloned()
+            .or_else(|| {
+                self.library
+                    .liked
+                    .items
+                    .iter()
+                    .find(|item| item.track.uri == uri)
+                    .map(|item| item.track.clone())
+            })
+            .or_else(|| {
+                self.now_playing_item().and_then(|item| match item {
+                    PlayableItem::Track(track) if track.uri == uri => Some(track),
+                    _ => None,
+                })
+            })
+            .or_else(|| {
+                self.table_rows.values().find_map(|table| {
+                    table.items.iter().find_map(|(item, _, _)| match item {
+                        PlayableItem::Track(track) if track.uri == uri => Some(track.clone()),
+                        _ => None,
+                    })
+                })
+            })
+            .or_else(|| {
+                self.home
+                    .top_tracks
+                    .get()
+                    .and_then(|tracks| tracks.iter().find(|track| track.uri == uri).cloned())
+            })
+            .or_else(|| {
+                self.search
+                    .results
+                    .get()
+                    .and_then(|results| results.tracks.as_ref())
+                    .and_then(|tracks| tracks.items.iter().find(|track| track.uri == uri).cloned())
+            });
+        let missing = track.is_none();
+        let track = track.unwrap_or_else(|| Track {
+            uri: uri.to_string(),
+            id: Some(id.to_string()),
+            name: "Loading…".into(),
+            ..Default::default()
+        });
+        self.liked_songs.change(uri.to_string(), saved, track);
+        if saved && missing && self.track_requests.insert(id.to_string()) {
+            self.backend.api(ApiRequest::Track { id: id.to_string() });
+        }
+        true
     }
 }
 
@@ -10766,6 +10967,136 @@ mod tests {
                 100.0, 150.0
             ))),
             "attach restored the main window position: {commands:?}"
+        );
+    }
+
+    fn cached_liked_app() -> App {
+        use crate::api::models::SavedTrack;
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.user = Some(User {
+            id: "alice".into(),
+            ..Default::default()
+        });
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.liked_songs.cache_checked = true;
+        app.load_generation = 1;
+        app.liked_songs.start_refresh(1);
+        app.liked_songs.absorb(
+            0,
+            crate::api::models::Page {
+                items: (0..100)
+                    .map(|n| SavedTrack {
+                        track: Track {
+                            uri: format!("spotify:track:{n}"),
+                            id: Some(n.to_string()),
+                            name: format!("Song {n}"),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                    .collect(),
+                total: 100,
+                limit: 100,
+                ..Default::default()
+            },
+            jiff::Timestamp::now().as_second(),
+        );
+        app.sync_liked_songs();
+        app
+    }
+
+    #[test]
+    fn liked_cache_ignores_another_account_and_late_responses_after_sign_out() {
+        let mut app = cached_liked_app();
+        let cache = app.liked_songs.checkpoint("alice".into(), true).unwrap();
+        app.reset_data();
+        app.user = Some(User {
+            id: "bob".into(),
+            ..Default::default()
+        });
+        app.ensure_liked_songs();
+        let generation = app.liked_songs.generation;
+        app.receive_liked_cache("alice", generation, Some(cache.clone()));
+        assert!(app.library.liked.items.is_empty());
+        app.handle_api(ApiResponse::SavedTracks {
+            offset: 0,
+            generation,
+            account_id: Some("alice".into()),
+            result: Ok(crate::api::models::Page {
+                items: vec![crate::api::models::SavedTrack::default()],
+                ..Default::default()
+            }),
+        });
+        assert!(app.library.liked.items.is_empty());
+        app.reset_data();
+        app.user = None;
+        app.receive_liked_cache("bob", generation, Some(cache));
+        assert!(!app.liked_songs.cache_checked);
+        assert!(app.library.liked.items.is_empty());
+    }
+
+    #[test]
+    fn liking_and_unliking_update_rows_before_the_network_answers() {
+        let mut app = cached_liked_app();
+        app.set_saved("spotify:track:0".into(), false);
+        assert_eq!(app.library.liked.items.len(), 99);
+        assert!(
+            !app.library
+                .liked
+                .items
+                .iter()
+                .any(|item| item.track.uri == "spotify:track:0")
+        );
+        app.set_saved("spotify:track:new".into(), true);
+        assert_eq!(app.library.liked.items.len(), 100);
+        assert_eq!(app.library.liked.items[0].track.uri, "spotify:track:new");
+        app.handle_api(ApiResponse::SavedChanged {
+            uris: vec!["spotify:track:new".into()],
+            saved: true,
+            result: Ok(()),
+        });
+        assert_eq!(
+            app.library.liked.items.len(),
+            100,
+            "acknowledging a like does not clear the list"
+        );
+        assert_eq!(app.library.liked.items[0].track.uri, "spotify:track:new");
+        app.handle_api(ApiResponse::Contains {
+            uris: vec!["spotify:track:new".into()],
+            result: Ok(vec![false]),
+        });
+        assert_eq!(app.is_saved("spotify:track:new"), Some(true));
+    }
+
+    #[test]
+    fn manual_liked_refresh_keeps_rows_sort_and_selection_while_loading() {
+        let mut app = cached_liked_app();
+        let sort = TableSort {
+            column: SortColumn::Title,
+            ascending: false,
+        };
+        app.table_sorts.insert(Page::LikedSongs, sort);
+        app.pick_row(&Page::LikedSongs, "liked", 7, RowPick::Only, 100);
+        let revision = app.library.liked.revision;
+        app.refresh_liked_songs();
+        assert_eq!(app.library.liked.items.len(), 100);
+        assert_eq!(app.library.liked.revision, revision);
+        assert_eq!(app.table_sorts[&Page::LikedSongs], sort);
+        assert_eq!(picked(&app, &Page::LikedSongs), vec![7]);
+        assert!(app.library.liked.loading);
+        app.handle_api(ApiResponse::SavedTracks {
+            offset: 0,
+            generation: 1,
+            account_id: Some("alice".into()),
+            result: Ok(crate::api::models::Page::default()),
+        });
+        assert_eq!(
+            app.library.liked.items.len(),
+            100,
+            "a previous load cannot replace current rows"
         );
     }
 

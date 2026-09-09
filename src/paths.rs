@@ -114,6 +114,17 @@ impl AppDirs {
         self.playlist_cache_dir().join(account_id)
     }
 
+    pub fn liked_songs_cache_file(&self, account_id: &str) -> PathBuf {
+        // Hex encoding also keeps unusual account IDs within the cache root.
+        let account: String = account_id
+            .bytes()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        self.cache
+            .join("liked-songs")
+            .join(format!("{account}.json"))
+    }
+
     pub fn ensure(&self) -> std::io::Result<()> {
         for dir in [&self.config, &self.state, &self.cache] {
             std::fs::create_dir_all(dir)?;

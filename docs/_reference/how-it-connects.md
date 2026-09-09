@@ -51,6 +51,11 @@ adds a separate Development Mode quota. See
   carries the Spotify artwork URL for the desktop to resolve and asks for
   nothing extra.
 - Lyrics, in the cache directory, for a month.
+- Liked Songs metadata, scoped to the verified account, in the cache directory.
+  Cached pages less than 15 minutes old need no repeat request. Older cached
+  prefixes refresh through the existing Web API grant, one page at a time,
+  while the saved rows remain visible. Manual refresh starts immediately.
+  Like and Unlike are kept over lagging reads until Spotify confirms them.
 - Fastpotify has no telemetry, analytics, or hosted service. When the lyrics
   panel is open and Spotify has no lyrics, it sends the track's artist, title,
   album, and length to [lrclib.net](https://lrclib.net). It also checks

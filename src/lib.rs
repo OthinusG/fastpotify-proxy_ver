@@ -10,6 +10,7 @@ pub mod demo;
 pub mod eq;
 pub mod history;
 pub mod images;
+pub mod liked;
 pub mod limiter;
 pub mod link;
 pub mod lyrics;

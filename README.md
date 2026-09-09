@@ -32,6 +32,8 @@ everyday use, and connection details.
   combines entries with the same device ID.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
+  Liked Songs reopens from an account-specific metadata cache. Older rows
+  refresh in the background while Like and Unlike take effect immediately.
 - **Search** across songs, artists, albums, playlists, podcasts, and episodes,
   with a top result and per-type views. Right-click results and cards for their actions.
 - **Home** with Made for you, Recently played, your top artists and songs, and
