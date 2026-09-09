@@ -624,6 +624,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.queue_tab = QueueTab::Recents;
             }
             "devices" => app.show_devices = true,
+            "update" => {
+                app.update = Some(crate::updates::Release {
+                    version: "0.7.1".into(),
+                    url: "https://fastpotify.rocks/download/".into(),
+                });
+            }
             "many-devices" => {
                 app.show_devices = true;
                 app.devices.extend((0..40).map(|index| Device {
