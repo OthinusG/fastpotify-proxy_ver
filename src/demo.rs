@@ -719,6 +719,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.collapsed_folders = vec!["f2".into()];
             }
             "small" => app.settings.skin_scale = Some(1),
+            "windows-taskbar" => app.demo_windows_controls = true,
             "compact" => {
                 app.settings.sidebar_compact = true;
                 app.settings.tracklist_compact = true;
@@ -1588,6 +1589,45 @@ mod tests {
                 ..
             }]
         ));
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn the_windows_taskbar_setting_keeps_its_choice_without_closing_settings() {
+        use egui::accesskit::Role;
+        let (ctx, mut app) = accessible_app("winamp-taskbar-setting");
+        app.open(Page::Settings);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        if !cfg!(windows) {
+            assert!(
+                !tree
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Show Winamp in taskbar"))
+            );
+        }
+        app.demo_windows_controls = true;
+        for _ in 0..4 {
+            accessible_frame(&ctx, &mut app, vec![]);
+        }
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let control = accessible_node(&tree, "Show Winamp in taskbar", Role::CheckBox);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(
+                control,
+                egui::accesskit::Action::Click,
+                None,
+            )],
+        );
+        assert!(!app.settings.winamp_show_taskbar);
+        assert!(!app.settings.winamp_window && !app.switch_intent);
+        let path = app.dirs.config.join("winamp-taskbar-choice.json");
+        app.settings.save(&path);
+        app.settings = Settings::load(&path);
+        assert!(!app.settings.winamp_show_taskbar);
         app.backend.shutdown();
     }
 

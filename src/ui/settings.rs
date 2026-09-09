@@ -692,6 +692,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             },
         );
+        if app.windows_controls_visible() {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Show in taskbar",
+                "Keep a taskbar button for the mini player. The tray icon stays available when hidden.",
+                |ui| {
+                    let mut visible = app.settings.winamp_show_taskbar;
+                    let response =
+                        widgets::switch(ui, &palette, "Show Winamp in taskbar", &mut visible);
+                    if response.changed() {
+                        app.actions.push(Action::SetWinampTaskbar(visible));
+                    }
+                    #[cfg(any(test, feature = "demo"))]
+                    if app.demo_windows_controls {
+                        let id = egui::Id::new("demo-winamp-taskbar-focus");
+                        if !ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
+                            response.scroll_to_me(Some(Align::Center));
+                            ui.data_mut(|data| data.insert_temp(id, true));
+                        }
+                    }
+                },
+            );
+        }
     });
 
     section(ui, &palette, "MilkDrop", |ui| {

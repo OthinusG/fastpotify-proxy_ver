@@ -82,6 +82,8 @@ everyday use, and connection details.
   and equalizer. It keeps its shade mode and, where the desktop permits,
   its own position when switching views. Drop a skin from the
   [Winamp Skin Museum](https://skins.webamp.org) on either window to add it.
+  On Windows, after 0.7.1, hide its taskbar button from Settings or the mini
+  player's options menu while keeping the window and tray controls available.
 
   ![The mini player wearing the built-in skin](docs/assets/images/winamp.png)
 - **Equalizer.** Winamp's ten bands and presets over the music played on

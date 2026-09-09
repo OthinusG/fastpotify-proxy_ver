@@ -203,6 +203,8 @@ pub struct App {
     pub palette: Palette,
     /// Translation pilot selected by demo mode. Production stays in English.
     pub locale: crate::i18n::Locale,
+    #[cfg(any(test, feature = "demo"))]
+    pub demo_windows_controls: bool,
     applied_dark: Option<bool>,
 
     pub auth: AuthStatus,
@@ -527,6 +529,8 @@ impl App {
             offline: false,
             palette: Palette::dark(),
             locale: crate::i18n::Locale::English,
+            #[cfg(any(test, feature = "demo"))]
+            demo_windows_controls: false,
             applied_dark: None,
             auth: AuthStatus::Starting,
             user: None,
@@ -2486,6 +2490,17 @@ impl App {
             playing: now.as_ref().is_some_and(|now| now.playing),
             can_control: now.as_ref().is_some_and(|now| now.can_control),
             dark,
+        }
+    }
+
+    pub fn windows_controls_visible(&self) -> bool {
+        #[cfg(any(test, feature = "demo"))]
+        {
+            cfg!(windows) || self.demo_windows_controls
+        }
+        #[cfg(not(any(test, feature = "demo")))]
+        {
+            cfg!(windows)
         }
     }
 
@@ -6385,6 +6400,20 @@ impl App {
                 // the live window.
                 self.push_winamp_level(ctx);
             }
+            Action::SetWinampTaskbar(visible) => {
+                if self.settings.winamp_show_taskbar != visible {
+                    self.settings.winamp_show_taskbar = visible;
+                    self.mark_settings_dirty();
+                    if self.settings.winamp_window {
+                        // This window attribute is fixed at creation. Keep
+                        // the visible mini player, its position, and playback
+                        // while replacing only its native window.
+                        self.winamp.remember_position();
+                        self.switch_intent = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
             Action::ToggleWinampPlaylist => {
                 self.settings.playlist_open = !self.settings.playlist_open;
                 self.settings_dirty = true;
@@ -9615,6 +9644,57 @@ mod tests {
         app.attach(&ctx);
         assert_eq!(buttons(&app.thumb_state(false))[1].icon, Icon::Play);
         assert!(!app.thumb_state(false).dark);
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn changing_mini_taskbar_visibility_recreates_only_an_open_mini_window() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let ctx = egui::Context::default();
+        app.apply(Action::SetWinampTaskbar(false), &ctx);
+        assert!(!app.settings.winamp_show_taskbar);
+        assert!(!app.switch_intent, "settings do not close the main window");
+        app.settings.winamp_window = true;
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:continues".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.apply(Action::SetWinampTaskbar(true), &ctx);
+        });
+        output.textures_delta.clear();
+        assert!(app.settings.winamp_window && app.switch_intent);
+        assert!(!app.hide_intent && !app.quit_requested);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
+        );
+        assert_eq!(app.local.playback, Playback::Playing);
+        assert_eq!(
+            app.local.track.as_ref().unwrap().uri,
+            "spotify:track:continues"
+        );
+        app.switch_intent = false;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.apply(Action::SetWinampTaskbar(true), &ctx);
+        });
+        output.textures_delta.clear();
+        assert!(!app.switch_intent);
+        assert!(
+            !output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
+        );
+        app.apply(Action::ToggleWinampWindow, &ctx);
+        assert!(
+            !app.settings.winamp_window,
+            "returning to the main interface remains available"
+        );
         app.backend.shutdown();
     }
 

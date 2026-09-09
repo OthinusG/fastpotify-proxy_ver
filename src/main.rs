@@ -39,7 +39,8 @@ struct Cli {
     demo_page: Option<String>,
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
-    /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`, `personal-app`, `german`.
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`, `personal-app`,
+    /// `windows-taskbar`, `german`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
@@ -428,6 +429,8 @@ fn main() -> eframe::Result<()> {
         );
         #[cfg(not(feature = "demo"))]
         let options = native_options(false, mini, None);
+        #[cfg(windows)]
+        let thumbbar_enabled = desktop_surfaces && options.viewport.taskbar != Some(false);
         eframe::run_native(
             "Fastpotify",
             options,
@@ -452,7 +455,7 @@ fn main() -> eframe::Result<()> {
                 let thumbbar = {
                     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
                     let mut toolbar = fastpotify::thumbbar::ThumbBar::new();
-                    if desktop_surfaces
+                    if thumbbar_enabled
                         && let Ok(handle) = cc.window_handle()
                         && let RawWindowHandle::Win32(window) = handle.as_raw()
                     {
@@ -577,6 +580,7 @@ struct MiniWindow {
     size: egui::Vec2,
     position: Option<[f32; 2]>,
     on_top: bool,
+    taskbar: bool,
     storage_path: std::path::PathBuf,
 }
 
@@ -586,6 +590,7 @@ impl MiniWindow {
             size: fastpotify::ui::winamp::initial_size(&app.settings),
             position: app.winamp.restore_pos,
             on_top: app.settings.winamp_on_top,
+            taskbar: app.settings.winamp_show_taskbar,
             storage_path: app.dirs.cache.join("winamp.ron"),
         })
     }
@@ -637,6 +642,7 @@ fn native_options(
     let viewport = egui::ViewportBuilder::default()
         .with_title("Fastpotify")
         .with_app_id("fastpotify")
+        .with_taskbar(true)
         .with_icon(icon);
     let viewport = match mini {
         Some(mini) => {
@@ -653,6 +659,8 @@ fn native_options(
                 .with_min_inner_size(mini.size)
                 .with_max_inner_size(mini.size)
                 .with_window_level(level);
+            // egui applies this native attribute on Windows only.
+            let viewport = viewport.with_taskbar(mini.taskbar);
             match mini.position {
                 Some([x, y]) => viewport.with_position([x, y]),
                 None => viewport,
@@ -715,6 +723,7 @@ mod native_window_tests {
                     size,
                     position: Some([300.0, 200.0]),
                     on_top: false,
+                    taskbar: true,
                     storage_path: std::path::PathBuf::from("cache/winamp.ron"),
                 }),
                 None,
@@ -736,6 +745,31 @@ mod native_window_tests {
         assert_eq!(options.viewport.fullsize_content_view, Some(true));
         assert_eq!(options.viewport.titlebar_shown, Some(false));
         assert_eq!(options.viewport.title_shown, Some(false));
+    }
+
+    #[test]
+    fn hiding_the_mini_taskbar_button_never_hides_the_main_window_button() {
+        for taskbar in [false, true] {
+            let mini = MiniWindow {
+                size: egui::vec2(550.0, 232.0),
+                position: Some([123.0, 456.0]),
+                on_top: true,
+                taskbar,
+                storage_path: "cache/winamp.ron".into(),
+            };
+            let options = native_options(false, Some(mini), None);
+            assert_eq!(options.viewport.taskbar, Some(taskbar));
+            assert_eq!(options.viewport.position, Some(egui::pos2(123.0, 456.0)));
+            assert_eq!(options.viewport.inner_size, Some(egui::vec2(550.0, 232.0)));
+            assert_eq!(
+                options.viewport.window_level,
+                Some(egui::WindowLevel::AlwaysOnTop)
+            );
+            assert_eq!(
+                native_options(false, None, None).viewport.taskbar,
+                Some(true)
+            );
+        }
     }
 
     #[test]

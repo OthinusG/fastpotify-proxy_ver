@@ -154,6 +154,7 @@ main fields are:
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
 | `winamp_window` | `false` | The window is the Winamp mini player |
+| `winamp_show_taskbar` | `true` | Windows only, after 0.7.1: show the Winamp window's taskbar button; the main window always keeps its button |
 | `skin` | none | File or folder name in the skins folder; blank uses the built-in skin |
 | `skin_scale` | by display | Screen pixels per skin pixel, 1 to 4 |
 | `winamp_on_top` | `false` | Keep the mini player above other windows |

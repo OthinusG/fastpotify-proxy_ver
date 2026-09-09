@@ -104,6 +104,15 @@ window or switching to the Winamp window creates its controls again. Media
 keys and the system's now-playing controls continue working while the window
 is closed. These buttons add no Spotify requests beyond their playback actions.
 
+For the Winamp mini player, turn off **Show in taskbar** under
+**Settings > Winamp skins**, or **Show in taskbar** in its options menu.
+The choice survives restarts. The mini player stays visible; the tray icon,
+**Ctrl+M**, the skin logo, and launching Fastpotify again remain ways to reach
+the app. Returning to the main window always restores its taskbar button.
+Changing the option while the mini player is open replaces that window while
+playback continues. This setting is available on Windows; it does not change
+Linux panels or the macOS Dock.
+
 ## Recent
 
 The queue panel's second tab combines Spotify's history with tracks played

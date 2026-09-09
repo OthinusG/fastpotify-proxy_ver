@@ -146,6 +146,8 @@ pub struct Settings {
     pub zoom: f32,
     /// The Winamp window is open.
     pub winamp_window: bool,
+    /// Windows: keep a taskbar button while the Winamp window is visible.
+    pub winamp_show_taskbar: bool,
     /// Skin file or folder name. `None` selects the built-in skin.
     pub skin: Option<String>,
     /// Screen pixels per skin pixel; `None` picks double size for the
@@ -231,6 +233,7 @@ impl Default for Settings {
             library_sort: std::collections::BTreeMap::new(),
             zoom: 1.0,
             winamp_window: false,
+            winamp_show_taskbar: true,
             skin: None,
             skin_scale: None,
             winamp_on_top: false,
@@ -349,6 +352,7 @@ mod tests {
     fn older_settings_keep_the_winamp_window_closed_and_the_built_in_skin() {
         let settings: Settings = serde_json::from_str(r#"{"zoom": 1.2}"#).unwrap();
         assert!(!settings.winamp_window);
+        assert!(settings.winamp_show_taskbar);
         assert_eq!(settings.skin, None);
         assert_eq!(settings.skin_scale, None);
         assert!(!settings.winamp_on_top);
