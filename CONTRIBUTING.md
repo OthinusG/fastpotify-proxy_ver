@@ -122,5 +122,10 @@ MilkDrop out and needs none of that. CI repeats the test suite on Linux,
 macOS, and Windows. Passing CI is required, but does not replace review
 for correctness, product fit, maintainability, or security.
 
+When changing `Cargo.lock` or `flake.nix`, also verify `nix build .#default`
+on a Nix host or wait for the Nix CI job. A package-version-only lockfile
+change can change the vendor hash. Releases must wait for all required CI
+jobs on the version commit before the tag is pushed.
+
 By contributing, you agree that your contribution is licensed under the
 project's MIT License.
