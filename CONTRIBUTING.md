@@ -130,6 +130,12 @@ on macOS and Windows; Linux requires an available Secret Service provider.
 The ordinary test suite uses an isolated fake store and never reads a real
 Spotify grant. Demo mode also skips credential restoration.
 
+Flatpak state-persistence changes also need
+`packaging/flatpak/test-state.sh`. It requires Flatpak, Ruby, and an installed
+Platform runtime, and checks both manifests using disposable dummy state.
+Pass a runtime and branch to use an existing installation, for example
+`packaging/flatpak/test-state.sh org.kde.Platform 6.9`.
+
 When changing `Cargo.lock` or `flake.nix`, also verify `nix build .#default`
 on a Nix host or wait for the Nix CI job. A package-version-only lockfile
 change can change the vendor hash. Releases must wait for all required CI

@@ -190,6 +190,8 @@ an error. Sign-out removes shared, personal, and playback grants, including
 legacy files and pending writes. Non-secret revocation markers prevent a
 failed keychain deletion from silently restoring a signed-out session.
 See [credential storage and file locations](docs/_reference/settings-and-files.md).
+On `main`, after 0.7.1, Flatpak also preserves its fallback state directory
+across full quits, including on older Flatpak versions.
 
 Playback approval requests Spotify's streaming permission separately. A
 verified personal app can complete sign-in while the shared app is busy.

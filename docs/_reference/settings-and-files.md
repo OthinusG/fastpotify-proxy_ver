@@ -117,6 +117,13 @@ number loads its 50-item page directly, without requesting every earlier page.
 Filtering or sorting still covers the whole playlist, so either action returns
 to the beginning and loads the remaining pages as needed.
 
+On `main`, for the release after 0.7.1, Flatpak also preserves the fallback
+state directory used when `XDG_STATE_HOME` is unset. Session state, history,
+logs, and credential revocation markers survive a full quit and relaunch under
+`~/.var/app/rocks.fastpotify.Fastpotify/.local/state/fastpotify/`. Configuration
+and caches remain under the app's `config/` and `cache/` directories. State
+already lost on quitting an older release cannot be recovered.
+
 On macOS, settings, state, and the logs are in
 `~/Library/Application Support/me.paolino.fastpotify` and the caches in
 `~/Library/Caches/me.paolino.fastpotify`. On Windows, settings are in
