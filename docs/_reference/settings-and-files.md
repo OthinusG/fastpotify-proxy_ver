@@ -147,6 +147,8 @@ main fields are:
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
 | `theme` | `dark` | `dark`, `light`, or `system` |
 | `accent_from_art` | `true` | Tint pages with album art |
+| `library_sort` | `{}` | Per-section Library order overrides, after 0.7.1: `library`, `recently_played`, `name`, `recently_added`, `local`, or `spotify`, where supported |
+| `sidebar_order` | `[]` | Saved local playlist arrangement, retained when another sort is selected |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
 | `winamp_window` | `false` | The window is the Winamp mini player |

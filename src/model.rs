@@ -842,6 +842,10 @@ pub enum Action {
     /// Ask GitHub for the latest release and report the result to the user.
     CheckForUpdates,
     SettingsChanged,
+    SetLibrarySort {
+        shelf: crate::settings::LibraryShelf,
+        sort: crate::settings::LibrarySort,
+    },
     RestartEngine,
     EnablePlayback,
     ShowWindow,

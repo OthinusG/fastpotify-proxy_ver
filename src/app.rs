@@ -6223,6 +6223,18 @@ impl App {
                 }
             }
             Action::CheckForUpdates => self.check_for_updates(true),
+            Action::SetLibrarySort { shelf, sort } => {
+                if sort.supports(shelf) {
+                    self.settings.library_sort.insert(shelf, sort);
+                    match shelf {
+                        crate::settings::LibraryShelf::Albums => self.library.albums.error = None,
+                        crate::settings::LibraryShelf::Artists => self.library.artists.error = None,
+                        crate::settings::LibraryShelf::Podcasts => self.library.shows.error = None,
+                        crate::settings::LibraryShelf::Playlists => {}
+                    }
+                    self.mark_settings_dirty();
+                }
+            }
             Action::SettingsChanged => {
                 self.settings_dirty = true;
                 ctx.set_theme(match self.settings.theme {

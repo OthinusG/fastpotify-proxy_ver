@@ -53,10 +53,31 @@ Winamp skins do not yet have equivalent accessibility coverage.
 
 ## Library order
 
-By default, the sidebar sorts playlists by when you last played them. Drag a
-playlist to switch to a custom order. New playlists appear below the pinned
-group. Choose **Sort by recently played** from a playlist's context menu to
-restore the default order.
+On `main`, after 0.7.1, the menu below the Library filters selects an order
+for each section. **Name** and **Recently played** are available throughout.
+Albums and podcasts also offer **Recently added**, using their actual save
+dates. Spotify does not supply equivalent dates for followed playlists or
+artists, so those sections do not offer that choice. Entries with missing save
+dates come last.
+
+**Spotify custom order** follows the playlist sequence and folders supplied by
+the existing local playback session. Until that order arrives, available
+playlists stay visible. The last good tree is kept for the same signed-in
+account. Fastpotify's local pins remain at the top, including pins from a closed
+folder. Changing an order or dragging a row here does not change Spotify's
+order or folders.
+
+Drag playlists to choose **Local custom order**. New playlists appear below the
+pinned group. Selecting **Name**, **Recently played** or **Spotify custom order**
+keeps the saved arrangement, so selecting **Local custom order** restores it.
+The playlist context menu's **Sort by recently played** also preserves it.
+
+Upgrading keeps the previous default: a saved local playlist arrangement wins;
+otherwise available Spotify folders keep their order, and a flat playlist list
+uses recent plays. Other sections keep their supplied Library order until you
+select a sort. Explicit sorts load the remaining pages of the selected section
+in the background. A failed page stops that loading; choosing the order again
+retries it.
 
 ## Recent
 

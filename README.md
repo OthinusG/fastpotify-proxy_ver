@@ -32,6 +32,8 @@ everyday use, and connection details.
   combines entries with the same device ID.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
+  On `main`, after 0.7.1, choose name, recent plays, or saved-date order where
+  available. Follow Spotify’s playlist order or keep a separate local arrangement.
   Liked Songs reopens from an account-specific metadata cache. Older rows
   refresh in the background while Like and Unlike take effect immediately.
   Right-click album, artist, and podcast cards for their actions (on `main`,

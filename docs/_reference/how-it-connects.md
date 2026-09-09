@@ -46,6 +46,12 @@ On `main`, after 0.7.1, verified Premium accounts using shared access see a
 one-time introduction to that option. Setup and dismissal are remembered in
 settings. The prompt uses the existing account profile and adds no request.
 
+On `main`, after 0.7.1, explicitly sorting a Library section loads its remaining
+pages through the existing Web API grant, one at a time, while loaded entries
+stay visible. A failed page stops automatic loading. Spotify custom playlist
+order uses the existing account-scoped rootlist from local playback; sorting
+and dragging never write that order back to Spotify.
+
 ## What the client stores
 
 - On `main`, for the release after 0.7.1, shared and personal Web API grants

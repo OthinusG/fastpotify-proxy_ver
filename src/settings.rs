@@ -4,6 +4,37 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LibraryShelf {
+    #[default]
+    Playlists,
+    Albums,
+    Artists,
+    Podcasts,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibrarySort {
+    Library,
+    RecentlyPlayed,
+    Name,
+    RecentlyAdded,
+    Local,
+    Spotify,
+}
+
+impl LibrarySort {
+    pub fn supports(self, shelf: LibraryShelf) -> bool {
+        match self {
+            Self::RecentlyPlayed | Self::Name | Self::Library => true,
+            Self::RecentlyAdded => matches!(shelf, LibraryShelf::Albums | LibraryShelf::Podcasts),
+            Self::Local | Self::Spotify => shelf == LibraryShelf::Playlists,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
@@ -100,9 +131,12 @@ pub struct Settings {
     pub check_for_updates: bool,
     /// Context URIs pinned to the top of the sidebar, in pin order.
     pub pinned_contexts: Vec<String>,
-    /// The sidebar's own playlist order, set by dragging rows. Empty means
-    /// the automatic order: the pinned block first, then recently played.
+    /// The sidebar's own playlist order, set by dragging rows. Kept while
+    /// another sort is selected; empty means no saved local arrangement.
     pub sidebar_order: Vec<String>,
+    /// Explicit order per Library shelf. Missing shelves keep their previous
+    /// behaviour; selecting another order never deletes the local arrangement.
+    pub library_sort: std::collections::BTreeMap<LibraryShelf, LibrarySort>,
     /// Interface zoom, egui's zoom factor; Ctrl+plus/minus changes it.
     pub zoom: f32,
     /// The Winamp window is open.
@@ -188,6 +222,7 @@ impl Default for Settings {
             check_for_updates: true,
             pinned_contexts: Vec::new(),
             sidebar_order: Vec::new(),
+            library_sort: std::collections::BTreeMap::new(),
             zoom: 1.0,
             winamp_window: false,
             skin: None,

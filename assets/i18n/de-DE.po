@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Fastpotify\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/fastpotify/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-09-09 15:26+0200\n"
+"POT-Creation-Date: 2026-09-09 15:48+0200\n"
 "PO-Revision-Date: 2026-09-09 13:30+0000\n"
 "Last-Translator: Fastpotify contributors\n"
 "Language-Team: German\n"
@@ -16,63 +16,87 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: src/ui/sidebar.rs:327 src/i18n.rs:102 src/i18n.rs:105
+#: src/ui/sidebar.rs:60
+msgid "Library order"
+msgstr "Bibliotheksreihenfolge"
+
+#: src/ui/sidebar.rs:63
+msgid "Recently played"
+msgstr "Zuletzt gespielt"
+
+#: src/ui/sidebar.rs:65
+msgid "Name"
+msgstr "Name"
+
+#: src/ui/sidebar.rs:68
+msgid "Recently added"
+msgstr "Zuletzt hinzugefügt"
+
+#: src/ui/sidebar.rs:70
+msgid "Local custom order"
+msgstr "Eigene Reihenfolge"
+
+#: src/ui/sidebar.rs:73
+msgid "Spotify custom order"
+msgstr "Spotify-Reihenfolge"
+
+#: src/ui/sidebar.rs:472 src/i18n.rs:102 src/i18n.rs:105
 msgid "Home"
 msgstr "Start"
 
-#: src/ui/sidebar.rs:338
+#: src/ui/sidebar.rs:483
 msgid "Search"
 msgstr "Suche"
 
-#: src/ui/sidebar.rs:370
+#: src/ui/sidebar.rs:515
 msgid "Library"
 msgstr "Bibliothek"
 
-#: src/ui/sidebar.rs:383
+#: src/ui/sidebar.rs:528
 msgid "Hide sidebar (Ctrl+B)"
 msgstr "Seitenleiste ausblenden (Strg+B)"
 
-#: src/ui/sidebar.rs:384
+#: src/ui/sidebar.rs:529
 msgid "Hide sidebar (Cmd+B)"
 msgstr "Seitenleiste ausblenden (Cmd+B)"
 
-#: src/ui/sidebar.rs:398
+#: src/ui/sidebar.rs:543
 msgid "Create a playlist"
 msgstr "Playlist erstellen"
 
-#: src/ui/sidebar.rs:414
+#: src/ui/sidebar.rs:559
 msgid "Search Your Library"
 msgstr "Bibliothek durchsuchen"
 
-#: src/ui/sidebar.rs:432
+#: src/ui/sidebar.rs:577
 msgid "Playlists"
 msgstr "Playlists"
 
-#: src/ui/sidebar.rs:433
+#: src/ui/sidebar.rs:578
 msgid "Albums"
 msgstr "Alben"
 
-#: src/ui/sidebar.rs:434
+#: src/ui/sidebar.rs:579
 msgid "Artists"
 msgstr "Künstler"
 
-#: src/ui/sidebar.rs:435
+#: src/ui/sidebar.rs:580
 msgid "Podcasts"
 msgstr "Podcasts"
 
-#: src/ui/sidebar.rs:453
+#: src/ui/sidebar.rs:600
 msgid "Search in Your Library"
 msgstr "Deine Bibliothek durchsuchen"
 
-#: src/ui/sidebar.rs:490
+#: src/ui/sidebar.rs:649
 msgid "Liked Songs"
 msgstr "Lieblingssongs"
 
-#: src/ui/sidebar.rs:497
+#: src/ui/sidebar.rs:656
 msgid "Playlist"
 msgstr "Playlist"
 
-#: src/ui/sidebar.rs:603
+#: src/ui/sidebar.rs:751
 msgid "Artist"
 msgstr "Künstler"
 

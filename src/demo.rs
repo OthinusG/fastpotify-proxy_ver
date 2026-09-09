@@ -1023,6 +1023,124 @@ mod tests {
     }
 
     #[test]
+    fn library_sort_menu_preserves_saved_order_and_keyboard_activation() {
+        use crate::settings::{LibraryShelf, LibrarySort};
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("library-sort");
+        app.settings.sidebar_order =
+            vec!["spotify:playlist:pl4".into(), "spotify:playlist:pl1".into()];
+        let saved = app.settings.sidebar_order.clone();
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let sort = accessible_node(&tree, "Local custom order", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(sort, AccessibleAction::Click, None)],
+        );
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Recently added"))
+        );
+        let name = accessible_node(&tree, "Name", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(name, AccessibleAction::Focus, None)],
+        );
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            app.settings.library_sort.get(&LibraryShelf::Playlists),
+            Some(&LibrarySort::Name)
+        );
+        assert_eq!(app.settings.sidebar_order, saved);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let sort = accessible_node(&tree, "Name", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(sort, AccessibleAction::Click, None)],
+        );
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let local = accessible_node(&tree, "Local custom order", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(local, AccessibleAction::Click, None)],
+        );
+        assert_eq!(
+            app.settings.library_sort.get(&LibraryShelf::Playlists),
+            Some(&LibrarySort::Local)
+        );
+        assert_eq!(app.settings.sidebar_order, saved);
+        let restored: Settings =
+            serde_json::from_str(&serde_json::to_string(&app.settings).unwrap()).unwrap();
+        assert_eq!(restored.library_sort, app.settings.library_sort);
+        assert_eq!(restored.sidebar_order, saved);
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn library_sorts_finish_paging_without_retrying_failed_pages() {
+        use crate::settings::{LibraryShelf, LibrarySort};
+        for (shelf, label, page) in [
+            (LibraryShelf::Albums, "Albums", Page::Albums),
+            (LibraryShelf::Artists, "Artists", Page::Artists),
+            (LibraryShelf::Podcasts, "Podcasts", Page::Podcasts),
+        ] {
+            let (ctx, mut app) = accessible_app(&format!("library-sort-paging-{shelf:?}"));
+            let view = crate::ui::sidebar::show;
+            app.settings.library_sort.insert(shelf, LibrarySort::Name);
+            app.library.albums.next_offset = Some(50);
+            app.library.artists.complete = false;
+            app.library.artists.after = Some("next".into());
+            app.library.shows.next_offset = Some(50);
+            view_frame(&ctx, &mut app, vec![], view);
+            let painted = view_frame(&ctx, &mut app, vec![], view);
+            let position = painted
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap()
+                .1
+                .center();
+            view_frame(
+                &ctx,
+                &mut app,
+                pointer_click(position, egui::PointerButton::Primary),
+                view,
+            );
+            app.actions.clear();
+            view_frame(&ctx, &mut app, vec![], view);
+            assert!(
+                app.actions
+                    .iter()
+                    .any(|action| matches!(action, Action::LoadMore(found) if *found == page))
+            );
+            app.actions.clear();
+            app.library.albums.error = Some("Try again later".into());
+            app.library.artists.error = Some("Try again later".into());
+            app.library.shows.error = Some("Try again later".into());
+            for _ in 0..3 {
+                view_frame(&ctx, &mut app, vec![], view);
+                assert!(
+                    !app.actions
+                        .iter()
+                        .any(|action| matches!(action, Action::LoadMore(found) if *found == page)),
+                    "failed pages must not retry every frame"
+                );
+            }
+            app.backend.shutdown();
+        }
+    }
+
+    #[test]
     fn personal_app_intro_can_be_dismissed_or_open_setup_with_keyboard_focus() {
         use egui::accesskit::{Action as AccessibleAction, Role};
 
