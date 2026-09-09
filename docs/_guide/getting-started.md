@@ -69,6 +69,9 @@ You can rename it in Settings.
   menu or Ctrl+Q. On macOS you can also reopen it from the Dock. Settings can
   turn this off. On Linux, including Flatpak, a desktop with a working system
   tray is required for this behavior.
+- **Play and Pause fade.** With the default audio backend, music played on
+  this computer fades in or out to avoid a hard cut. Gapless transitions
+  between songs and playback on another device are unchanged.
 - **Play buttons show progress.** The button spins until Spotify responds.
 - **Common actions have shortcuts.** Space plays and pauses, Ctrl+F or `/`
   searches, and `Q` opens the queue. Ctrl+/ shows the full list.
