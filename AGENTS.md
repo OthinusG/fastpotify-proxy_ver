@@ -95,6 +95,14 @@ compiling and passing the checks on its own. Feature branches and pull
 requests are for outside contributors; the maintainer's own work, and
 work done with the maintainer, does not go through them.
 
+Keep `main` linear. Squash outside pull requests into one focused commit,
+preserving contributor credit. Never create or push merge commits, including
+local `git merge --no-ff` commits that bypass GitHub's squash-only setting.
+When updating a local checkout, use fast-forward-only pulls; rebase unpublished
+local commits if needed. Before pushing, verify that the commits being added
+contain no merge commits. Rewriting published history requires explicit
+maintainer approval and an exact force-with-lease guard; keep a recovery ref.
+
 ## Definition of done
 
 - Add focused regression tests for changed behaviour. Use the `demo` feature

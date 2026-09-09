@@ -81,6 +81,12 @@ Keep each pull request to one change. Explain why it belongs in Fastpotify,
 what changed, and how you tested it. Avoid unrelated formatting, refactors,
 generated prose, and large mechanical rewrites.
 
+`main` has a linear history. Outside pull requests are squash-merged into one
+focused commit with contributor credit; merge commits are not accepted.
+Maintainer work is committed directly on `main`, one topic per commit. Use
+fast-forward-only pulls and rebase unpublished local commits when needed.
+Do not rewrite published history without explicit maintainer approval.
+
 The same rules apply to hand-written and AI-assisted changes. The author must
 understand every line and answer review comments with specific reasoning.
 
