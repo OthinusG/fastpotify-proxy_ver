@@ -48,6 +48,8 @@ completed successfully, including its safety checks and GitHub actions. It does
 not promise a reply, acceptance, or a fix. Clear reports may only receive a
 label. Replies ask for missing information or give a useful answer or decision;
 the agent does not repeat questions already answered or post status chatter.
+An assessment must record an applied action or an explicit no-action result.
+Missing outputs and failed safety checks cannot receive a completion marker.
 
 The marker is cleared when reassessing the same item and restored only after
 success. Failures can be retried from Actions without removing reactions by
@@ -56,7 +58,7 @@ attempt had started. An older rocket never prevents a new assessment.
 
 The workflow is controlled by the `COPILOT_ISSUE_ASSESSMENT_ENABLED` repository
 variable. Edit `.github/workflows/issue-assessment.md`, then regenerate its
-lockfile with `gh aw compile issue-assessment` (gh-aw v0.88.2). The companion
+lockfile with `gh aw compile issue-assessment` (gh-aw v0.88.7). The companion
 `issue-assessment-complete.yml` marks successful runs. Its small subject artifact
 contains only the GitHub node ID and, for comments, the assessed edit timestamp.
 

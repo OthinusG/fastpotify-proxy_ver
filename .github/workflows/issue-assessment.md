@@ -49,6 +49,26 @@ jobs:
   pre-activation:
     outputs:
       assessment_needed: ${{ steps.assessment_needed.outputs.needed }}
+  verify-assessment:
+    needs: [agent, detection, safe_outputs]
+    if: always() && needs.agent.result != 'skipped'
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require a completed assessment
+        uses: actions/github-script@v9
+        env:
+          ASSESSMENT_JOBS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const { assessmentSucceeded } = require('./.github/scripts/issue-assessment.cjs');
+            if (!assessmentSucceeded(JSON.parse(process.env.ASSESSMENT_JOBS))) {
+              core.setFailed('Assessment did not finish with an applied action or an explicit no-action result.');
+            }
 
 concurrency:
   group: issue-assessment-${{ github.event.issue.number || github.event.discussion.number || fromJSON(github.event.inputs.aw_context || '{}').item_number || github.run_id }}

@@ -89,4 +89,15 @@ function targetArtifactName(artifacts, attempt) {
     .sort((a, b) => b.attempt - a.attempt)[0]?.name || '';
 }
 
-module.exports = { prepare, complete, targetArtifactName };
+function assessmentSucceeded(jobs) {
+  if (!['agent', 'detection', 'safe_outputs']
+      .every(name => jobs[name]?.result === 'success')) return false;
+  const outputs = jobs.safe_outputs.outputs || {};
+  if (Number(outputs.process_safe_outputs_items_failed || 0) !== 0) return false;
+  const types = (jobs.agent.outputs?.output_types || '').split(',');
+  if (types.some(type => ['missing_tool', 'missing_data', 'report_incomplete'].includes(type))) return false;
+  return types.includes('noop')
+    || Number(outputs.process_safe_outputs_processed_count) > 0;
+}
+
+module.exports = { prepare, complete, targetArtifactName, assessmentSucceeded };

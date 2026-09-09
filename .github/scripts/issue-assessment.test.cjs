@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { prepare, complete, targetArtifactName } = require('./issue-assessment.cjs');
+const { prepare, complete, targetArtifactName, assessmentSucceeded } = require('./issue-assessment.cjs');
 
 function fixture(type = 'Issue') {
   const updatedAt = '2026-09-07T12:00:00Z';
@@ -204,4 +204,49 @@ test('filtered events, expired artifacts, and unrelated artifacts have no comple
     { name: 'agent', expired: false },
     { name: 'assessment-target-2', expired: false },
   ], 1), '');
+});
+
+function completedJobs() {
+  return {
+    agent: { result: 'success', outputs: { output_types: '' } },
+    detection: { result: 'success' },
+    safe_outputs: { result: 'success', outputs: {
+      process_safe_outputs_items_failed: '0',
+      process_safe_outputs_processed_count: '0',
+    } },
+  };
+}
+
+test('successful jobs with no safe output do not count as an assessment', () => {
+  assert.equal(assessmentSucceeded(completedJobs()), false);
+  assert.equal(assessmentSucceeded({}), false);
+});
+
+test('an explicit no-action result or an applied action completes assessment', () => {
+  const jobs = completedJobs();
+  jobs.agent.outputs.output_types = 'noop';
+  assert.equal(assessmentSucceeded(jobs), true);
+  jobs.agent.outputs.output_types = '';
+  assert.equal(assessmentSucceeded(jobs), false);
+  jobs.safe_outputs.outputs.process_safe_outputs_processed_count = '1';
+  assert.equal(assessmentSucceeded(jobs), true);
+});
+
+test('a failed write or safety check cannot be hidden by a no-action result', () => {
+  const jobs = completedJobs();
+  jobs.agent.outputs.output_types = 'noop';
+  jobs.safe_outputs.outputs.process_safe_outputs_items_failed = '1';
+  assert.equal(assessmentSucceeded(jobs), false);
+  jobs.safe_outputs.outputs.process_safe_outputs_items_failed = '0';
+  for (const name of ['agent', 'detection', 'safe_outputs']) {
+    for (const result of ['failure', 'cancelled', 'skipped']) {
+      jobs[name].result = result;
+      assert.equal(assessmentSucceeded(jobs), false, `${name}: ${result}`);
+    }
+    jobs[name].result = 'success';
+  }
+  for (const type of ['missing_tool', 'missing_data', 'report_incomplete']) {
+    jobs.agent.outputs.output_types = `noop,${type}`;
+    assert.equal(assessmentSucceeded(jobs), false);
+  }
 });
