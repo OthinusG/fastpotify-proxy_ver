@@ -67,7 +67,8 @@ You can rename it in Settings.
 - **Closing the window does not stop the music.** Fastpotify keeps playing
   from the system tray; reopen it from the tray icon and quit from the tray
   menu or Ctrl+Q. On macOS you can also reopen it from the Dock. Settings can
-  turn this off.
+  turn this off. On Linux, including Flatpak, a desktop with a working system
+  tray is required for this behavior.
 - **Play buttons show progress.** The button spins until Spotify responds.
 - **Common actions have shortcuts.** Space plays and pauses, Ctrl+F or `/`
   searches, and `Q` opens the queue. Ctrl+/ shows the full list.
