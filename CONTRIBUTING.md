@@ -32,6 +32,10 @@ answered from there and closed.
 Duplicate, out-of-scope, or incomplete issues may be closed with a short
 explanation.
 
+A bug can be closed once its fix is on `main` and the relevant checks pass,
+with the commit and release status stated. Reporter confirmation is welcome
+but is not required for closure. Reopen the issue if it persists after updating.
+
 ## Automated triage
 
 Copilot assesses new and reopened issues, new discussions, and new or edited

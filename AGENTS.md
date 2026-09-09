@@ -67,6 +67,11 @@ picture. Zero volume still dances.
 - When a valid issue has a clear, bounded fix that can be implemented now,
   implement it instead of posting the proposed design in the issue. Do not use
   public comments as notes to yourself or as a substitute for doing the work.
+- Close a bug once its fix is on `main` and the relevant checks pass. State
+  which commit fixes it and whether it is released. Reporter confirmation is
+  welcome, but is not a routine requirement for closure; reopen if the problem
+  persists after updating. Keep an issue open when the fix is still uncertain
+  or only part of the report has been addressed.
 - Never post two maintainer comments in a row on the same issue or pull
   request. If nobody has replied since the last maintainer comment, edit that
   comment instead.
