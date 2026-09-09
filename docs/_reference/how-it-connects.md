@@ -38,9 +38,11 @@ adds a separate Development Mode quota. See
 - The first time MilkDrop opens with an empty preset folder, the two projectM
   preset packs are downloaded from GitHub (about 26 MB) and stored in the
   config directory.
-- On Windows and macOS, desktop media controls receive artwork from that
-  cache instead of downloading the Spotify image a second time. Linux MPRIS
-  carries the Spotify artwork URL for the desktop to resolve.
+- On Windows and macOS, desktop media controls load the cover themselves and
+  are given a file, so the full-size artwork is downloaded into that cache
+  when a song starts, even when no view on screen is showing it. Linux MPRIS
+  carries the Spotify artwork URL for the desktop to resolve and asks for
+  nothing extra.
 - Lyrics, in the cache directory, for a month.
 - Fastpotify has no telemetry, analytics, or hosted service. When the lyrics
   panel is open and Spotify has no lyrics, it sends the track's artist, title,
