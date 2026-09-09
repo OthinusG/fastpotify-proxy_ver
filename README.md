@@ -42,7 +42,8 @@ everyday use, and connection details.
 - **Edit your playlists.** Create, rename, describe, reorder, and delete them.
   Add songs from a row menu, or drag a row or the currently playing song to a
   playlist in the sidebar. A playlist a friend shared with you takes songs too,
-  as Spotify's own apps allow.
+  as Spotify's own apps allow. Filter the **Add to playlist** menu by name to
+  find the destination quickly.
 - **Opens Spotify links.** Fastpotify registers for `spotify:` links, so a
   song, album, artist, playlist, or podcast shared from another app opens
   in it, whether it is running or not. `open.spotify.com` addresses go

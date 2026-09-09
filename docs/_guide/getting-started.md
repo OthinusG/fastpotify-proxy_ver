@@ -81,6 +81,9 @@ You can rename it in Settings.
   playlist, or podcast it shows. Search shelves and filtered grids, and Home's
   playlist shortcuts, Made for you, Recently played, and top artist cards offer
   the same menus. Your own playlists include **Edit details** and **Delete**.
+  **Add to playlist** includes a local name filter for the playlists you can
+  edit, for either one song or a selection. **New playlist** stays available
+  when no names match.
   If the playlist already contains the song, Fastpotify asks before adding
   another copy.
 - **Spotify links open in Fastpotify.** A `spotify:` link shared from another

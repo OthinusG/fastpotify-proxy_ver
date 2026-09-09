@@ -1424,6 +1424,186 @@ mod tests {
         app.backend.shutdown();
     }
 
+    #[test]
+    fn playlist_filter_preserves_edit_permissions_and_keyboard_selection() {
+        use egui::accesskit::Role;
+        for count in [1, 2] {
+            let (ctx, mut app) = accessible_app(&format!("playlist-filter-{count}"));
+            app.backend.set_offline(true);
+            let owner = app.user_id().unwrap().to_string();
+            let make = |id: &str, name: &str, owned: bool, collaborative| Playlist {
+                id: id.into(),
+                uri: format!("spotify:playlist:{id}"),
+                name: name.into(),
+                owner: crate::api::models::Owner {
+                    id: Some(if owned {
+                        owner.clone()
+                    } else {
+                        "another-user".into()
+                    }),
+                    ..Default::default()
+                },
+                collaborative,
+                ..Default::default()
+            };
+            app.library.playlists = Loadable::Loaded(vec![
+                make("readonly", "Night locked", false, false),
+                make("owned", "Night drive", true, false),
+                make("shared", "Night together", false, true),
+                make("day", "Daylight", true, false),
+            ]);
+            let items: Vec<_> = (0..count).map(|i| PlayableItem::Track(track(i))).collect();
+            let mut query = String::new();
+            let draw = |app: &mut App, query: &mut String, focus: bool, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760.0, 620.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let field = crate::ui::widgets::playlist_picker(ui, app, &items, query);
+                        if focus {
+                            field.request_focus();
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            draw(&mut app, &mut query, true, vec![]);
+            let output = draw(
+                &mut app,
+                &mut query,
+                false,
+                vec![egui::Event::Text("  NiGhT  ".into())],
+            );
+            assert_eq!(query, "  NiGhT  ");
+            let tree = output.platform_output.accesskit_update.unwrap();
+            for name in ["Night locked", "Daylight"] {
+                assert!(
+                    !tree
+                        .nodes
+                        .iter()
+                        .any(|(_, node)| node.label() == Some(name)),
+                    "{name} must not be offered"
+                );
+            }
+            let owned = accessible_node(&tree, "Night drive", Role::Button);
+            accessible_node(&tree, "Night together", Role::Button);
+            let mut reached = false;
+            for _ in 0..6 {
+                let output = draw(
+                    &mut app,
+                    &mut query,
+                    false,
+                    vec![keyboard(egui::Key::Tab, egui::Modifiers::NONE)],
+                );
+                if output.platform_output.accesskit_update.unwrap().focus == owned {
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(
+                reached,
+                "Tab must reach the filtered playlist from the search field"
+            );
+            app.actions.clear();
+            draw(
+                &mut app,
+                &mut query,
+                false,
+                vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
+            );
+            assert!(
+                matches!(app.actions.as_slice(), [crate::model::Action::AddToPlaylist { playlist_id, items: selected, .. }] if playlist_id == "owned" && selected == &items)
+            );
+            query = "no such playlist".into();
+            let output = draw(&mut app, &mut query, false, vec![]);
+            let tree = output.platform_output.accesskit_update.unwrap();
+            accessible_node(&tree, "New playlist", Role::Button);
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.job.text == "No matching playlists")));
+            app.backend.shutdown();
+        }
+    }
+
+    #[test]
+    fn playlist_submenu_keeps_typing_and_resets_after_the_parent_closes() {
+        use egui::accesskit::{Action, Role};
+        let (ctx, mut app) = accessible_app("playlist-submenu");
+        app.backend.set_offline(true);
+        let songs = vec![PlayableItem::Track(track(0))];
+        let draw = |app: &mut App, show_parent: bool, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(760.0, 620.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if show_parent {
+                        crate::ui::widgets::picked_menu(ui, app, &songs);
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let tree = draw(&mut app, true, vec![])
+            .platform_output
+            .accesskit_update
+            .unwrap();
+        let add = accessible_node(&tree, "Add to playlist", Role::Button);
+        let open = || vec![accessible_action(add, Action::Click, None)];
+        draw(&mut app, true, open());
+        draw(&mut app, true, vec![]);
+        let tree = draw(&mut app, true, vec![egui::Event::Text("night".into())])
+            .platform_output
+            .accesskit_update
+            .unwrap();
+        assert!(egui::Popup::is_any_open(&ctx));
+        assert!(
+            tree.nodes
+                .iter()
+                .any(|(_, node)| node.value() == Some("night"))
+        );
+        accessible_node(&tree, "Late night focus", Role::Button);
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Sunday morning"))
+        );
+        draw(
+            &mut app,
+            true,
+            vec![keyboard(egui::Key::Escape, egui::Modifiers::NONE)],
+        );
+        assert!(!egui::Popup::is_any_open(&ctx));
+        // A closed outer context menu no longer draws its submenu at all.
+        draw(&mut app, false, vec![]);
+        draw(&mut app, true, vec![]);
+        draw(&mut app, true, open());
+        let tree = draw(&mut app, true, vec![])
+            .platform_output
+            .accesskit_update
+            .unwrap();
+        accessible_node(&tree, "Sunday morning", Role::Button);
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.value() == Some("night"))
+        );
+        app.backend.shutdown();
+    }
+
     fn search_frame(
         ctx: &egui::Context,
         app: &mut App,
