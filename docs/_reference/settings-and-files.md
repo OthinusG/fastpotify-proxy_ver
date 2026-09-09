@@ -48,6 +48,9 @@ Successful playlist edits keep that loaded prefix and save it under Spotify's
 new snapshot. Fastpotify reloads the playlist only if the write fails and the
 optimistic edit must be reconciled.
 
+The following Liked Songs caching behavior is on `main`, for the release
+after 0.7.1.
+
 Liked Songs metadata is stored separately under `liked-songs/` in the cache
 directory, one JSON file per account. Only the verified account's rows are
 shown. Fresh cached pages are reused for 15 minutes; older pages refresh in

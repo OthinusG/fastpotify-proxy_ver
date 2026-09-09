@@ -52,6 +52,7 @@ adds a separate Development Mode quota. See
   nothing extra.
 - Lyrics, in the cache directory, for a month.
 - Liked Songs metadata, scoped to the verified account, in the cache directory.
+  This behavior is on `main`, for the release after 0.7.1.
   Cached pages less than 15 minutes old need no repeat request. Older cached
   prefixes refresh through the existing Web API grant, one page at a time,
   while the saved rows remain visible. Manual refresh starts immediately.
