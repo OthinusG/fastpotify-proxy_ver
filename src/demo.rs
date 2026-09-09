@@ -1927,6 +1927,59 @@ mod tests {
     }
 
     #[test]
+    fn library_and_discography_cards_open_their_own_menus() {
+        for (page, section, title, uri, labels) in [
+            (
+                Page::Albums,
+                "Albums",
+                album(1).name,
+                album(1).uri,
+                vec!["Add to queue", "Shuffle play"],
+            ),
+            (
+                Page::Artists,
+                "Artists",
+                artist(1).name,
+                artist(1).uri,
+                vec!["Follow"],
+            ),
+            (
+                Page::Podcasts,
+                "Podcasts",
+                show(1).name,
+                show(1).uri,
+                vec!["Add to Your Library"],
+            ),
+            (
+                Page::Artist("art0".into()),
+                "Discography",
+                album(1).name,
+                album(1).uri,
+                vec!["Add to queue", "Shuffle play"],
+            ),
+            (
+                Page::Artist("art0".into()),
+                "Fans also like",
+                artist(2).name,
+                artist(2).uri,
+                vec!["Follow"],
+            ),
+        ] {
+            let (ctx, mut app) = accessible_app(&format!("library-card-{section}"));
+            app.open(page);
+            fn view(app: &mut App, ui: &mut egui::Ui) {
+                if let Page::Artist(id) = app.page().clone() {
+                    crate::ui::artist::show(app, ui, &id);
+                } else {
+                    crate::ui::library::show(app, ui, app.page().clone());
+                }
+            }
+            check_card_menu(&mut app, &ctx, view, section, &title, &uri, &labels);
+            app.backend.shutdown();
+        }
+    }
+
+    #[test]
     fn search_shelves_and_filtered_grids_open_item_menus() {
         for (filter, title, uri, labels) in [
             (

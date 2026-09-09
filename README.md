@@ -34,6 +34,8 @@ everyday use, and connection details.
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
   Liked Songs reopens from an account-specific metadata cache. Older rows
   refresh in the background while Like and Unlike take effect immediately.
+  Right-click album, artist, and podcast cards for their actions (on `main`,
+  after 0.7.1).
 - **Search** across songs, artists, albums, playlists, podcasts, and episodes,
   with a top result and per-type views. Right-click results and cards for their actions.
 - **Home** with Made for you, Recently played, your top artists and songs, and
@@ -41,6 +43,8 @@ everyday use, and connection details.
 - **Artist pages** with popular songs, a filterable discography, and related
   artists. **Album**, **playlist**, and **podcast** pages support playback
   from any row.
+  Discography and related-artist cards also have right-click menus (on `main`,
+  after 0.7.1).
   Artist names in the player bar open their pages, including during local
   playback before Web API metadata arrives (on `main`, after 0.7.1).
 - **Edit your playlists.** Create, rename, describe, reorder, and delete them.

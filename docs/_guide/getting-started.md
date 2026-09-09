@@ -84,6 +84,9 @@ You can rename it in Settings.
   playlist, or podcast it shows. Search shelves and filtered grids, and Home's
   playlist shortcuts, Made for you, Recently played, and top artist cards offer
   the same menus. Your own playlists include **Edit details** and **Delete**.
+  On `main`, for the release after 0.7.1, Library's album, artist, and podcast
+  grids and artist pages' discography and related-artist cards offer these
+  menus too. Right-clicking opens the menu without starting playback.
   **Add to playlist** includes a local name filter for the playlists you can
   edit, for either one song or a selection. **New playlist** stays available
   when no names match.
