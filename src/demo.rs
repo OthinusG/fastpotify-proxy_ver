@@ -1340,6 +1340,390 @@ mod tests {
         frame_events(ctx, app, Vec::new());
     }
 
+    fn search_frame(
+        ctx: &egui::Context,
+        app: &mut App,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Rect)> {
+        view_frame(ctx, app, events, crate::ui::search::show)
+    }
+
+    fn view_frame(
+        ctx: &egui::Context,
+        app: &mut App,
+        events: Vec<egui::Event>,
+        view: fn(&mut App, &mut egui::Ui),
+    ) -> Vec<(String, egui::Rect)> {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 2200.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| view(app, ui),
+        );
+        output.textures_delta.clear();
+        fn walk(shape: &egui::epaint::Shape, text: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::epaint::Shape::Text(shape) => text.push((
+                    shape.galley.job.text.clone(),
+                    shape.galley.rect.translate(shape.pos.to_vec2()),
+                )),
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().for_each(|shape| walk(shape, text));
+                }
+                _ => {}
+            }
+        }
+        let mut text = Vec::new();
+        for shape in &output.shapes {
+            walk(&shape.shape, &mut text);
+        }
+        text
+    }
+
+    fn pointer_click(pos: egui::Pos2, button: egui::PointerButton) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    #[test]
+    fn search_top_result_opens_the_menu_for_its_item() {
+        for kind in ["track", "artist", "album", "playlist", "show"] {
+            let (ctx, mut app) = accessible_app(&format!("top-result-{kind}"));
+            let (results, title, uri) = match kind {
+                "track" => {
+                    let item = track(0);
+                    (
+                        SearchResults {
+                            tracks: Some(page(vec![item.clone()])),
+                            ..Default::default()
+                        },
+                        item.name,
+                        item.uri,
+                    )
+                }
+                "artist" => {
+                    let item = artist(0);
+                    (
+                        SearchResults {
+                            artists: Some(page(vec![item.clone()])),
+                            ..Default::default()
+                        },
+                        item.name,
+                        item.uri,
+                    )
+                }
+                "album" => {
+                    let item = album(0);
+                    (
+                        SearchResults {
+                            albums: Some(page(vec![item.clone()])),
+                            ..Default::default()
+                        },
+                        item.name,
+                        item.uri,
+                    )
+                }
+                "playlist" => {
+                    let item = playlist(0);
+                    (
+                        SearchResults {
+                            playlists: Some(page(vec![item.clone()])),
+                            ..Default::default()
+                        },
+                        item.name,
+                        item.uri,
+                    )
+                }
+                _ => {
+                    let item = show(0);
+                    (
+                        SearchResults {
+                            shows: Some(page(vec![item.clone()])),
+                            ..Default::default()
+                        },
+                        item.name,
+                        item.uri,
+                    )
+                }
+            };
+            app.search.results = Loadable::Loaded(results);
+            app.saved.clear();
+            search_frame(&ctx, &mut app, vec![]);
+            let text = search_frame(&ctx, &mut app, vec![]);
+            let pos = text
+                .iter()
+                .find(|(text, _)| text == &title)
+                .expect("top result title")
+                .1
+                .center();
+            app.actions.clear();
+            search_frame(
+                &ctx,
+                &mut app,
+                pointer_click(pos, egui::PointerButton::Secondary),
+            );
+            let text = search_frame(&ctx, &mut app, vec![]);
+            assert!(
+                app.actions.is_empty(),
+                "right-clicking {kind} must not navigate or play"
+            );
+            let expected = match kind {
+                "track" => &[
+                    "Play next",
+                    "Save to Liked Songs",
+                    "Add to playlist",
+                    "Go to song radio",
+                    "Go to artist",
+                    "Go to album",
+                ][..],
+                "artist" => &["Play", "Follow"][..],
+                "album" => &["Play", "Shuffle play", "Play next", "Add to Your Library"][..],
+                _ => &["Play", "Add to Your Library"][..],
+            };
+            for label in expected {
+                assert!(
+                    text.iter().any(|(text, _)| text == label),
+                    "{kind} menu is missing {label}"
+                );
+            }
+            let copy = text
+                .iter()
+                .find(|(text, _)| text == "Copy link")
+                .unwrap_or_else(|| {
+                    panic!("right-clicking the {kind} top result must open its menu")
+                });
+            search_frame(
+                &ctx,
+                &mut app,
+                pointer_click(copy.1.center(), egui::PointerButton::Primary),
+            );
+            assert!(
+                matches!(app.actions.as_slice(), [crate::model::Action::CopyLink(link)] if link == &uri)
+            );
+            app.backend.shutdown();
+        }
+    }
+
+    fn check_card_menu(
+        app: &mut App,
+        ctx: &egui::Context,
+        view: fn(&mut App, &mut egui::Ui),
+        section: &str,
+        title: &str,
+        uri: &str,
+        labels: &[&str],
+    ) {
+        view_frame(ctx, app, vec![], view);
+        let text = view_frame(ctx, app, vec![], view);
+        let below = text
+            .iter()
+            .find(|(text, _)| text == section)
+            .unwrap()
+            .1
+            .bottom();
+        let pos = text
+            .iter()
+            .find(|(text, rect)| text == title && rect.top() >= below)
+            .unwrap_or_else(|| panic!("{title} in {section}"))
+            .1
+            .center();
+        let earlier_card = text
+            .iter()
+            .find(|(_, rect)| (rect.center().y - pos.y).abs() < 1.0 && rect.center().x < pos.x)
+            .map(|(_, rect)| rect.center());
+        app.actions.clear();
+        view_frame(
+            ctx,
+            app,
+            pointer_click(pos, egui::PointerButton::Secondary),
+            view,
+        );
+        // A hovered Play button must not change which item owns the open menu.
+        if let Some(pos) = earlier_card {
+            view_frame(ctx, app, vec![egui::Event::PointerMoved(pos)], view);
+        }
+        let text = view_frame(ctx, app, vec![], view);
+        assert!(
+            app.actions.is_empty(),
+            "right-click must not navigate or play"
+        );
+        for label in labels {
+            assert!(
+                text.iter().any(|(text, _)| text == label),
+                "{section}: missing {label}"
+            );
+        }
+        let copy = text
+            .iter()
+            .find(|(text, _)| text == "Copy link")
+            .unwrap_or_else(|| panic!("{section}: no menu for {title}"));
+        view_frame(
+            ctx,
+            app,
+            pointer_click(copy.1.center(), egui::PointerButton::Primary),
+            view,
+        );
+        assert!(matches!(app.actions.as_slice(), [Action::CopyLink(link)] if link == uri));
+    }
+
+    #[test]
+    fn search_shelves_and_filtered_grids_open_item_menus() {
+        for (filter, title, uri, labels) in [
+            (
+                SearchFilter::Artists,
+                artist(1).name,
+                artist(1).uri,
+                vec!["Follow"],
+            ),
+            (
+                SearchFilter::Albums,
+                album(0).name,
+                album(0).uri,
+                vec!["Play next", "Add to Your Library"],
+            ),
+            (
+                SearchFilter::Playlists,
+                playlist(1).name,
+                playlist(1).uri,
+                vec!["Edit details", "Delete"],
+            ),
+            (
+                SearchFilter::Podcasts,
+                show(0).name,
+                show(0).uri,
+                vec!["Add to Your Library"],
+            ),
+        ] {
+            for selected in [SearchFilter::All, filter] {
+                let (ctx, mut app) =
+                    accessible_app(&format!("search-card-{selected:?}-{filter:?}"));
+                app.saved.clear();
+                app.search.filter = selected;
+                // Keep matching artist subtitles in song rows out of the card lookup.
+                if let Loadable::Loaded(results) = &mut app.search.results {
+                    results.tracks = None;
+                    results.episodes = None;
+                }
+                let section = if selected == SearchFilter::All {
+                    filter.label()
+                } else {
+                    "All"
+                };
+                check_card_menu(
+                    &mut app,
+                    &ctx,
+                    crate::ui::search::show,
+                    section,
+                    &title,
+                    &uri,
+                    &labels,
+                );
+                app.backend.shutdown();
+            }
+        }
+    }
+
+    #[test]
+    fn home_cards_open_item_menus() {
+        for (section, title, uri, labels) in [
+            (
+                crate::util::greeting(),
+                playlist(1).name,
+                playlist(1).uri,
+                vec!["Edit details", "Delete"],
+            ),
+            (
+                crate::util::greeting(),
+                playlist(0).name,
+                playlist(0).uri,
+                vec!["Remove from Your Library"],
+            ),
+            (
+                "Made for you",
+                playlist(0).name,
+                playlist(0).uri,
+                vec!["Remove from Your Library"],
+            ),
+            (
+                "Recently played",
+                track(5).name,
+                track(5).uri,
+                vec!["Play next", "Add to playlist", "Go to song radio"],
+            ),
+            (
+                "Your top artists",
+                artist(1).name,
+                artist(1).uri,
+                vec!["Follow"],
+            ),
+        ] {
+            let (ctx, mut app) = accessible_app(&format!("home-card-{section}-{title}"));
+            check_card_menu(
+                &mut app,
+                &ctx,
+                crate::ui::home::show,
+                section,
+                &title,
+                &uri,
+                &labels,
+            );
+            app.backend.shutdown();
+        }
+    }
+
+    #[test]
+    fn home_liked_songs_tile_keeps_its_primary_click_only() {
+        let (ctx, mut app) = accessible_app("home-liked-tile");
+        let view = crate::ui::home::show;
+        view_frame(&ctx, &mut app, vec![], view);
+        let text = view_frame(&ctx, &mut app, vec![], view);
+        let pos = text
+            .iter()
+            .find(|(text, _)| text == "Liked Songs")
+            .unwrap()
+            .1
+            .center();
+        app.actions.clear();
+        view_frame(
+            &ctx,
+            &mut app,
+            pointer_click(pos, egui::PointerButton::Secondary),
+            view,
+        );
+        let text = view_frame(&ctx, &mut app, vec![], view);
+        assert!(app.actions.is_empty());
+        assert!(!text.iter().any(|(text, _)| text == "Copy link"));
+        view_frame(
+            &ctx,
+            &mut app,
+            pointer_click(pos, egui::PointerButton::Primary),
+            view,
+        );
+        assert!(matches!(
+            app.actions.as_slice(),
+            [Action::Open(Page::LikedSongs)]
+        ));
+        app.backend.shutdown();
+    }
+
     fn frame_events(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
