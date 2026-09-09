@@ -383,6 +383,8 @@ fn main() -> eframe::Result<()> {
             tray: false,
         };
     }
+    #[cfg(windows)]
+    let desktop_surfaces = options.media_controls;
     #[allow(unused_mut)]
     let mut app = app::App::new(&waker, dirs, settings, options);
     if let Some(guard) = &instance {
@@ -446,10 +448,27 @@ fn main() -> eframe::Result<()> {
                     fastpotify::mac_menu::set_waker(move || ctx.request_repaint());
                 }
                 app.attach(&cc.egui_ctx);
+                #[cfg(windows)]
+                let thumbbar = {
+                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    let mut toolbar = fastpotify::thumbbar::ThumbBar::new();
+                    if desktop_surfaces
+                        && let Ok(handle) = cc.window_handle()
+                        && let RawWindowHandle::Win32(window) = handle.as_raw()
+                    {
+                        let wake = creator_waker.clone();
+                        // The shell and toolbar share this window's thread
+                        // and lifetime; the toolbar is detached on shell drop.
+                        unsafe { toolbar.attach(window.hwnd.get(), move || wake.wake()) };
+                    }
+                    toolbar
+                };
                 Ok(Box::new(Shell {
                     app: Some(app),
                     slot: std::sync::Arc::clone(&creator_slot),
                     mini_window,
+                    #[cfg(windows)]
+                    thumbbar,
                     #[cfg(feature = "demo")]
                     shot: creator_shot.clone(),
                 }))
@@ -749,6 +768,8 @@ struct Shell {
     slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
     /// The mode this window opened in, even after an action switches modes.
     mini_window: bool,
+    #[cfg(windows)]
+    thumbbar: fastpotify::thumbbar::ThumbBar,
     /// A pending `--demo-shot` capture, if this is a screenshot run.
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
@@ -878,7 +899,16 @@ impl eframe::App for Shell {
                 };
                 app.actions.push(action);
             }
+            #[cfg(windows)]
+            for command in self.thumbbar.drain_commands() {
+                if let Some(action) = command.action(&app.thumb_state(false)) {
+                    app.actions.push(action);
+                }
+            }
             app.background_frame(ctx);
+            #[cfg(windows)]
+            self.thumbbar
+                .sync(app.thumb_state(ctx.system_theme() != Some(egui::Theme::Light)));
         }
         #[cfg(feature = "demo")]
         self.drive_shot(ctx);
@@ -887,6 +917,9 @@ impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
             app.frame_ui(ui);
+            #[cfg(windows)]
+            self.thumbbar
+                .sync(app.thumb_state(ui.ctx().system_theme() != Some(egui::Theme::Light)));
         }
     }
 
@@ -913,6 +946,8 @@ impl eframe::App for Shell {
 
 impl Drop for Shell {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        self.thumbbar.detach();
         *self.slot.lock().unwrap_or_else(|p| p.into_inner()) = self.app.take();
     }
 }

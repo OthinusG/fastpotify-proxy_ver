@@ -2479,6 +2479,16 @@ impl App {
         }
     }
 
+    pub fn thumb_state(&self, dark: bool) -> crate::thumbbar::ThumbState {
+        let now = self.now_playing();
+        crate::thumbbar::ThumbState {
+            has_track: now.is_some(),
+            playing: now.as_ref().is_some_and(|now| now.playing),
+            can_control: now.as_ref().is_some_and(|now| now.can_control),
+            dark,
+        }
+    }
+
     fn sync_media_controls(&mut self, ctx: &egui::Context) {
         let art_file = self
             .now_playing()
@@ -9578,6 +9588,34 @@ mod tests {
             app.backend.art().prefetch(&ctx, url),
             "the loader still remembers artwork that has been deleted"
         );
+    }
+
+    #[test]
+    fn thumbnail_transport_tracks_optimistic_pause_and_window_recreation() {
+        use crate::thumbbar::{Icon, ThumbCommand, buttons};
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let ctx = egui::Context::default();
+        assert!(!app.thumb_state(true).has_track);
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:thumbnail".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        let state = app.thumb_state(true);
+        assert!(state.has_track && state.playing && state.can_control);
+        assert_eq!(buttons(&state)[1].icon, Icon::Pause);
+        app.apply(ThumbCommand::PlayPause.action(&state).unwrap(), &ctx);
+        assert_eq!(
+            buttons(&app.thumb_state(true))[1].icon,
+            Icon::Play,
+            "pause updates before a backend reply"
+        );
+        app.window_gone();
+        app.attach(&ctx);
+        assert_eq!(buttons(&app.thumb_state(false))[1].icon, Icon::Play);
+        assert!(!app.thumb_state(false).dark);
+        app.backend.shutdown();
     }
 
     fn headless_app() -> App {

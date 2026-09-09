@@ -105,7 +105,8 @@ everyday use, and connection details.
 - **Desktop integration.** MPRIS on Linux, so media keys, the shell, and
   `playerctl` see Fastpotify like any other player. On macOS and Windows,
   `fastpotify next` and its siblings drive the running app from a terminal,
-  a launcher, or a hotkey.
+  a launcher, or a hotkey. On Windows, after 0.7.1, hover the taskbar button
+  for Previous, Play/Pause, and Next under the window preview.
 
 ## Install
 

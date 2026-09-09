@@ -91,6 +91,19 @@ has no place in Spotify's playlist tree. Returning to **Local custom order**
 restores its saved position. Dragging a song onto Liked Songs still saves that
 song, wherever the row sits.
 
+## Windows taskbar controls
+
+On `main`, after 0.7.1, hovering Fastpotify's taskbar button offers **Previous**,
+**Play/Pause**, and **Next** beneath its window preview. They control the same
+playing device as the player bar, update immediately, and are disabled when
+there is no song or the device refuses controls. The icons follow the system
+appearance and display scaling.
+
+Closing to the tray removes the window and its preview. Reopening the main
+window or switching to the Winamp window creates its controls again. Media
+keys and the system's now-playing controls continue working while the window
+is closed. These buttons add no Spotify requests beyond their playback actions.
+
 ## Recent
 
 The queue panel's second tab combines Spotify's history with tracks played
