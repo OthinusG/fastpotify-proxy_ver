@@ -61,6 +61,9 @@ variable. Edit `.github/workflows/issue-assessment.md`, then regenerate its
 lockfile with `gh aw compile issue-assessment` (gh-aw v0.88.7). The companion
 `issue-assessment-complete.yml` marks successful runs. Its small subject artifact
 contains only the GitHub node ID and, for comments, the assessed edit timestamp.
+Keep the workflow's Copilot CLI version pinned. A version update must pass a
+fresh hosted assessment with a recorded result; compilation alone does not
+exercise the connection to its tools.
 
 ## Design principles
 
