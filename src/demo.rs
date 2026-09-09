@@ -535,6 +535,7 @@ pub fn populate(app: &mut App) {
     // Include an unsigned ZeroConf receiver in the device picker.
     app.receivers = vec![crate::zeroconf::Receiver {
         name: "House Spotify".into(),
+        device_id: Some("house-speaker".into()),
         address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 42)),
         port: 5555,
         path: "/zc".into(),
@@ -623,6 +624,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.queue_tab = QueueTab::Recents;
             }
             "devices" => app.show_devices = true,
+            "many-devices" => {
+                app.show_devices = true;
+                app.devices.extend((0..40).map(|index| Device {
+                    id: Some(format!("speaker-{index}")),
+                    name: format!("Speaker {index:02}"),
+                    kind: "speaker".into(),
+                    ..Default::default()
+                }));
+            }
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
             "premium" => app.dialog = Some(Dialog::PremiumNeeded),
             "create" => {
@@ -1338,6 +1348,80 @@ mod tests {
 
     fn frame(ctx: &egui::Context, app: &mut App) {
         frame_events(ctx, app, Vec::new());
+    }
+
+    #[test]
+    fn a_long_device_list_stays_in_the_window_and_scrolls_to_the_last_speaker() {
+        let (ctx, mut app) = accessible_app("long-device-list");
+        app.backend.set_offline(true);
+        app.show_devices = true;
+        app.local_ready = true;
+        app.receivers.clear();
+        app.devices = (0..40)
+            .map(|index| Device {
+                id: Some(format!("speaker-{index}")),
+                name: format!("Speaker {index:02}"),
+                kind: "speaker".into(),
+                ..Default::default()
+            })
+            .collect();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 620.0));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(crate::ui::devices::BUTTON_RECT_ID),
+                egui::Rect::from_min_size(egui::pos2(680.0, 580.0), egui::vec2(32.0, 32.0)),
+            )
+        });
+        let draw = |app: &mut App, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |_| crate::ui::devices::popup(app, &ctx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        draw(&mut app, vec![]);
+        draw(&mut app, vec![]);
+        let popup = egui::AreaState::load(&ctx, egui::Id::new("devices-popup"))
+            .unwrap()
+            .rect();
+        assert!(screen.contains_rect(popup), "the popup must fit: {popup:?}");
+        let cursor = popup.center();
+        draw(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(cursor),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -10_000.0),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                },
+            ],
+        );
+        let mut found = None;
+        for _ in 0..30 {
+            let output = draw(&mut app, vec![]);
+            for shape in output.shapes {
+                if let egui::epaint::Shape::Text(text) = shape.shape
+                    && text.galley.job.text == "Speaker 39"
+                    && shape.clip_rect.contains_rect(text.visual_bounding_rect())
+                {
+                    found = Some(text.visual_bounding_rect().center());
+                }
+            }
+        }
+        let last = found.expect("scrolling reaches the last speaker");
+        app.actions.clear();
+        draw(&mut app, pointer_click(last, egui::PointerButton::Primary));
+        assert!(app.actions.iter().any(
+            |action| matches!(action, crate::model::Action::Transfer(id) if id == "speaker-39")
+        ));
+        app.backend.shutdown();
     }
 
     fn search_frame(

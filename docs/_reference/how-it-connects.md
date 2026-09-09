@@ -80,7 +80,14 @@ Spotify's device list only shows signed-in receivers. A new librespot or
 spotifyd receiver is therefore invisible to the Web API.
 
 Receivers announce themselves over mDNS as `_spotify-connect._tcp` and answer
-a small HTTP interface. Fastpotify encrypts the stored librespot credential
+a small HTTP interface. Opening or refreshing the picker first reads
+`getInfo` to find each receiver's name and device ID. These probes run off
+the UI thread, four at a time, with a two-second limit per receiver and six
+seconds overall after discovery. Only responding receivers with a name and
+ID are offered. Matching IDs are combined; separate devices can have the
+same name. These reads send no account credential.
+
+When a receiver is selected, Fastpotify encrypts the stored librespot credential
 with a receiver-specific key and a key from a Diffie-Hellman exchange. The
 encrypted value only works for that receiver and exchange. Fastpotify does not
 save another copy of the credential.

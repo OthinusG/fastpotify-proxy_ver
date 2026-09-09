@@ -25,10 +25,11 @@ everyday use, and connection details.
   playback can try another endpoint.
 - **Controls other devices.** Move playback to a speaker, a phone, or
   another computer from the device picker, and keep controlling it: play,
-  pause, skip, seek, shuffle, repeat, volume.
+  pause, skip, seek, shuffle, repeat, volume. Long device lists scroll.
 - **Finds speakers on your network.** Fastpotify finds librespot, spotifyd,
   and supported hardware receivers over mDNS. Once connected, they appear as
-  Spotify Connect devices.
+  Spotify Connect devices. The picker uses responding receivers' names and
+  combines entries with the same device ID.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
 - **Search** across songs, artists, albums, playlists, podcasts, and episodes,

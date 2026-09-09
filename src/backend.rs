@@ -1464,7 +1464,9 @@ impl Worker {
         let events = self.events.clone();
         let waker = self.waker.clone();
         tokio::task::spawn_blocking(move || {
-            match crate::zeroconf::discover(std::time::Duration::from_secs(3)) {
+            match crate::zeroconf::discover(std::time::Duration::from_secs(3))
+                .and_then(crate::zeroconf::resolve_receivers)
+            {
                 Ok(receivers) => {
                     let _ = events.send(Event::Receivers(receivers));
                     waker.wake();
