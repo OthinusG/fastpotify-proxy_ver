@@ -1123,7 +1123,7 @@ mod tests {
         assert!(
             tree.nodes
                 .iter()
-                .any(|(_, node)| node.label() == Some("Play next")),
+                .any(|(_, node)| node.label() == Some("Add to queue")),
             "the keyboard opens the song menu"
         );
         app.backend.shutdown();
@@ -1571,7 +1571,7 @@ mod tests {
             );
             let expected = match kind {
                 "track" => &[
-                    "Play next",
+                    "Add to queue",
                     "Save to Liked Songs",
                     "Add to playlist",
                     "Go to song radio",
@@ -1579,7 +1579,12 @@ mod tests {
                     "Go to album",
                 ][..],
                 "artist" => &["Play", "Follow"][..],
-                "album" => &["Play", "Shuffle play", "Play next", "Add to Your Library"][..],
+                "album" => &[
+                    "Play",
+                    "Shuffle play",
+                    "Add to queue",
+                    "Add to Your Library",
+                ][..],
                 _ => &["Play", "Add to Your Library"][..],
             };
             for label in expected {
@@ -1681,7 +1686,7 @@ mod tests {
                 SearchFilter::Albums,
                 album(0).name,
                 album(0).uri,
-                vec!["Play next", "Add to Your Library"],
+                vec!["Add to queue", "Add to Your Library"],
             ),
             (
                 SearchFilter::Playlists,
@@ -1750,7 +1755,7 @@ mod tests {
                 "Recently played",
                 track(5).name,
                 track(5).uri,
-                vec!["Play next", "Add to playlist", "Go to song radio"],
+                vec!["Add to queue", "Add to playlist", "Go to song radio"],
             ),
             (
                 "Your top artists",
@@ -1861,7 +1866,7 @@ mod tests {
             frame(&ctx, &mut app);
         }
         app.toasts.clear();
-        app.toast("Wish You Were Here will play next");
+        app.toast("Wish You Were Here added to queue");
         // Two frames: an area sizes itself on its first one.
         let mut first = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
         first.textures_delta.clear();

@@ -5250,7 +5250,7 @@ impl App {
         }
         self.session_dirty = true;
         if announce {
-            self.toast(format!("{label} will play next"));
+            self.toast(format!("{label} added to queue"));
         }
         // Queue tracks and episodes directly on the active local engine.
         // Other targets and item types use the Web API.
@@ -5680,8 +5680,8 @@ impl App {
                     self.queue_one(uri, label, false);
                 }
                 self.toast(match count {
-                    1 => "1 song will play next".to_string(),
-                    count => format!("{count} songs will play next"),
+                    1 => "1 song added to queue".to_string(),
+                    count => format!("{count} songs added to queue"),
                 });
             }
             Action::SetSavedMany { uris, saved } => {
@@ -7773,7 +7773,7 @@ mod tests {
         );
     }
 
-    /// Rule: clearing takes back the rows Play next added, and the
+    /// Rule: clearing takes back the rows Add to queue added, and the
     /// context's own copy of the same song is not one of them, however
     /// recently the song was queued.
     #[test]
@@ -7826,7 +7826,7 @@ mod tests {
         );
     }
 
-    /// Play next inserts after manual queue rows and before context rows.
+    /// Add to queue inserts after manual queue rows and before context rows.
     #[test]
     fn play_next_queues_after_the_songs_already_queued() {
         let ctx = egui::Context::default();
@@ -7864,6 +7864,10 @@ mod tests {
                 "spotify:track:ctx2",
             ],
             "queued songs keep their order and stay ahead of the context"
+        );
+        assert_eq!(
+            app.toasts.last().map(|toast| toast.message.as_str()),
+            Some("c added to queue")
         );
     }
 

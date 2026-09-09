@@ -1,6 +1,6 @@
 ---
 title: The Queue's Rules
-description: What the queue shows, what Play next does, and what the app promises about both.
+description: What the queue shows, what Add to queue does, and what the app promises about both.
 nav_order: 2
 ---
 
@@ -21,7 +21,7 @@ check every one of them.
 1. **The list shows the play order.** The top row plays next, followed by the
    rows below it.
 
-2. **Play next adds a song to your part of the queue.** It goes after
+2. **Add to queue adds a song to your part of the queue.** It goes after
    the songs you queued earlier and before the playlist's songs. Queue
    the same song twice and it plays twice. A double-click only counts
    once.
