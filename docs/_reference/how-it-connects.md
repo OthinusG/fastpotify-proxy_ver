@@ -21,7 +21,11 @@ local playback:
    browser approval and stores its own reusable credential. Spotify Premium
    is required.
 
-Local playback authorization stays separate from both Web API grants.
+Local playback authorization stays separate from both Web API grants. Its
+browser approval requests only the streaming permission and always shows the
+consent dialog. The playback session uses the account ID verified by either
+Web API grant. A verified personal app can complete sign-in while the shared
+app's verification is still waiting.
 
 By default, Fastpotify uses the public app shared with spotify-player, ncspot,
 and Omarchy Spotify. Spotify divides its quota among all users. A personal app

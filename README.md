@@ -170,6 +170,9 @@ Spotify handles streaming separately from library access. Start it from the
 device menu (**Set up playback here**) or Settings. It needs Spotify
 Premium, and librespot stores a reusable credential for later sessions.
 
+Playback approval requests Spotify's streaming permission separately. A
+verified personal app can complete sign-in while the shared app is busy.
+
 The Web API uses a shared app by default. You can add a personal Spotify
 Development Mode app in Settings → Account for a separate quota. Fastpotify
 still uses the shared app for requests that personal apps do not support. If
