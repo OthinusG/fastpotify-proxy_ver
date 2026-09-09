@@ -1,0 +1,85 @@
+# Brazilian Portuguese translation of the Fastpotify navigation pilot.
+# Distributed under the same MIT license as Fastpotify.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Fastpotify\n"
+"Report-Msgid-Bugs-To: https://github.com/crmne/fastpotify/issues/new?"
+"template=translation.yml\n"
+"POT-Creation-Date: 2026-09-09 15:26+0200\n"
+"PO-Revision-Date: 2026-09-09 13:30+0000\n"
+"Last-Translator: Fastpotify contributors\n"
+"Language-Team: Brazilian Portuguese\n"
+"Language: pt_BR\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: src/ui/sidebar.rs:327 src/i18n.rs:102 src/i18n.rs:105
+msgid "Home"
+msgstr "Início"
+
+#: src/ui/sidebar.rs:338
+msgid "Search"
+msgstr "Buscar"
+
+#: src/ui/sidebar.rs:370
+msgid "Library"
+msgstr "Biblioteca"
+
+#: src/ui/sidebar.rs:383
+msgid "Hide sidebar (Ctrl+B)"
+msgstr "Ocultar barra lateral (Ctrl+B)"
+
+#: src/ui/sidebar.rs:384
+msgid "Hide sidebar (Cmd+B)"
+msgstr "Ocultar barra lateral (Cmd+B)"
+
+#: src/ui/sidebar.rs:398
+msgid "Create a playlist"
+msgstr "Criar playlist"
+
+#: src/ui/sidebar.rs:414
+msgid "Search Your Library"
+msgstr "Buscar na biblioteca"
+
+#: src/ui/sidebar.rs:432
+msgid "Playlists"
+msgstr "Playlists"
+
+#: src/ui/sidebar.rs:433
+msgid "Albums"
+msgstr "Álbuns"
+
+#: src/ui/sidebar.rs:434
+msgid "Artists"
+msgstr "Artistas"
+
+#: src/ui/sidebar.rs:435
+msgid "Podcasts"
+msgstr "Podcasts"
+
+#: src/ui/sidebar.rs:453
+msgid "Search in Your Library"
+msgstr "Buscar na sua biblioteca"
+
+#: src/ui/sidebar.rs:490
+msgid "Liked Songs"
+msgstr "Músicas curtidas"
+
+#: src/ui/sidebar.rs:497
+msgid "Playlist"
+msgstr "Playlist"
+
+#: src/ui/sidebar.rs:603
+msgid "Artist"
+msgstr "Artista"
+
+#. Translators: Keep {count} exactly as written. It becomes the number of liked songs.
+#: src/i18n.rs:66
+#, rust-format
+msgid "Playlist • {count} song"
+msgid_plural "Playlist • {count} songs"
+msgstr[0] "Playlist • {count} música"
+msgstr[1] "Playlist • {count} músicas"

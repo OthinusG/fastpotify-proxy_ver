@@ -136,6 +136,13 @@ Platform runtime, and checks both manifests using disposable dummy state.
 Pass a runtime and branch to use an existing installation, for example
 `packaging/flatpak/test-state.sh org.kde.Platform 6.9`.
 
+Translation changes also need `.github/scripts/update-translations.sh --check`,
+using GNU gettext tools with Rust support. Run the script without `--check` when
+translatable source strings change, and review any fuzzy or missing entries in
+the updated PO files. Normal Cargo builds compile the catalogs without gettext
+tools. See [Translating Fastpotify](docs/_reference/translating.md) for the pilot
+scope and contributor workflow.
+
 When changing `Cargo.lock` or `flake.nix`, also verify `nix build .#default`
 on a Nix host or wait for the Nix CI job. A package-version-only lockfile
 change can change the vendor hash. Releases must wait for all required CI

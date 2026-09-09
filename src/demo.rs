@@ -624,6 +624,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.queue_tab = QueueTab::Recents;
             }
             "devices" => app.show_devices = true,
+            "german" => app.locale = crate::i18n::Locale::German,
             "update" => {
                 app.update = Some(crate::updates::Release {
                     version: "0.7.1".into(),
@@ -948,6 +949,76 @@ mod tests {
         );
         assert_eq!(tree.focus, pause);
         app.backend.shutdown();
+    }
+
+    #[test]
+    fn translated_sidebar_keeps_keyboard_navigation_and_accessible_names() {
+        use crate::i18n::{Locale, gettext};
+        use clap::ValueEnum;
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        for &locale in Locale::value_variants() {
+            let (ctx, mut app) = accessible_app(&format!("translated-sidebar-{locale:?}"));
+            app.locale = locale;
+            accessible_frame(&ctx, &mut app, vec![]);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let home = accessible_node(&tree, &gettext(locale, "Home"), Role::Button);
+            let search = accessible_node(&tree, &gettext(locale, "Search"), Role::Button);
+            accessible_node(&tree, &gettext(locale, "Create a playlist"), Role::Button);
+            accessible_node(&tree, &gettext(locale, "Albums"), Role::Button);
+            accessible_node(&tree, &gettext(locale, "Artists"), Role::Button);
+            let liked = accessible_node(&tree, &gettext(locale, "Liked Songs"), Role::Button);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![accessible_action(home, AccessibleAction::Focus, None)],
+            );
+            let tree = accessible_frame(
+                &ctx,
+                &mut app,
+                vec![keyboard(egui::Key::Tab, egui::Modifiers::NONE)],
+            );
+            assert_eq!(tree.focus, search, "Tab order must survive translation");
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![accessible_action(liked, AccessibleAction::Focus, None)],
+            );
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
+            );
+            assert_eq!(app.page(), &Page::LikedSongs);
+
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let library_search =
+                accessible_node(&tree, &gettext(locale, "Search Your Library"), Role::Button);
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![accessible_action(
+                    library_search,
+                    AccessibleAction::Click,
+                    None,
+                )],
+            );
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            accessible_node(
+                &tree,
+                &gettext(locale, "Search in Your Library"),
+                Role::TextInput,
+            );
+            app.library.filter = gettext(locale, "Liked Songs").to_uppercase();
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            accessible_node(&tree, &gettext(locale, "Liked Songs"), Role::Button);
+            assert!(
+                !tree
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Discover Weekly"))
+            );
+            app.backend.shutdown();
+        }
     }
 
     #[test]

@@ -201,6 +201,8 @@ pub struct App {
     /// Sample data is loaded; Spotify requests are disabled.
     pub offline: bool,
     pub palette: Palette,
+    /// Translation pilot selected by demo mode. Production stays in English.
+    pub locale: crate::i18n::Locale,
     applied_dark: Option<bool>,
 
     pub auth: AuthStatus,
@@ -524,6 +526,7 @@ impl App {
             control_devices_stale: true,
             offline: false,
             palette: Palette::dark(),
+            locale: crate::i18n::Locale::English,
             applied_dark: None,
             auth: AuthStatus::Starting,
             user: None,

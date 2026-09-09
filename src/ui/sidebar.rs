@@ -4,6 +4,7 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, Rect, Sense, Vec2, pos2, 
 
 use crate::api::models::pick_image;
 use crate::app::App;
+use crate::i18n::gettext;
 use crate::model::{Action, Dialog, DragEntry, DragTrack, Loadable, Page};
 use crate::theme::{self, Icon, Palette};
 
@@ -317,11 +318,28 @@ fn nav_row(
 fn contents(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let page = app.page().clone();
+    let locale = app.locale;
     ui.add_space(4.0);
-    if nav_row(ui, &palette, Icon::House, "Home", page == Page::Home).clicked() {
+    if nav_row(
+        ui,
+        &palette,
+        Icon::House,
+        &gettext(locale, "Home"),
+        page == Page::Home,
+    )
+    .clicked()
+    {
         app.actions.push(Action::Open(Page::Home));
     }
-    if nav_row(ui, &palette, Icon::Search, "Search", page == Page::Search).clicked() {
+    if nav_row(
+        ui,
+        &palette,
+        Icon::Search,
+        &gettext(locale, "Search"),
+        page == Page::Search,
+    )
+    .clicked()
+    {
         app.actions.push(Action::FocusSearch);
     }
     ui.add_space(10.0);
@@ -347,7 +365,12 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         theme::icon(ui, Icon::Library, 22.0, palette.secondary);
         ui.add_space(2.0);
-        theme::text(ui, "Library", theme::bold(15.0), palette.text);
+        theme::text(
+            ui,
+            gettext(locale, "Library"),
+            theme::bold(15.0),
+            palette.text,
+        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             if theme::icon_button(
@@ -356,7 +379,10 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 16.0,
                 palette.secondary,
                 palette.text,
-                super::keys::platform_shortcut("Hide sidebar (Ctrl+B)", "Hide sidebar (Cmd+B)"),
+                super::keys::platform_shortcut(
+                    &gettext(locale, "Hide sidebar (Ctrl+B)"),
+                    &gettext(locale, "Hide sidebar (Cmd+B)"),
+                ),
             )
             .clicked()
             {
@@ -369,7 +395,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 16.0,
                 palette.secondary,
                 palette.text,
-                "Create a playlist",
+                &gettext(locale, "Create a playlist"),
             )
             .clicked()
             {
@@ -385,7 +411,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 16.0,
                 palette.secondary,
                 palette.text,
-                "Search Your Library",
+                &gettext(locale, "Search Your Library"),
             )
             .clicked()
             {
@@ -403,12 +429,12 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
         for (value, label) in [
-            (Filter::Playlists, "Playlists"),
-            (Filter::Albums, "Albums"),
-            (Filter::Artists, "Artists"),
-            (Filter::Podcasts, "Podcasts"),
+            (Filter::Playlists, gettext(locale, "Playlists")),
+            (Filter::Albums, gettext(locale, "Albums")),
+            (Filter::Artists, gettext(locale, "Artists")),
+            (Filter::Podcasts, gettext(locale, "Podcasts")),
         ] {
-            if theme::soft_button(ui, &palette, None, label, filter == value).clicked() {
+            if theme::soft_button(ui, &palette, None, &label, filter == value).clicked() {
                 filter = value;
             }
         }
@@ -424,7 +450,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
             &palette,
             egui::Id::new("sidebar-search"),
             &mut app.library.filter,
-            "Search in Your Library",
+            &gettext(locale, "Search in Your Library"),
             ui.available_width() - 4.0,
         );
         if focus_search {
@@ -461,13 +487,14 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     let mut more_page: Option<Page> = None;
     match filter {
         Filter::Playlists => {
-            if needle.is_empty() || "liked songs".contains(&needle) {
+            let liked_name = gettext(locale, "Liked Songs");
+            if needle.is_empty() || liked_name.to_lowercase().contains(&needle) {
                 entries.push(Entry {
                     image: None,
-                    name: "Liked Songs".into(),
+                    name: liked_name.into_owned(),
                     subtitle: match app.library.liked.total {
-                        Some(total) => format!("Playlist • {total} songs"),
-                        None => "Playlist".into(),
+                        Some(total) => locale.liked_song_count(total),
+                        None => gettext(locale, "Playlist").into_owned(),
                     },
                     page: Page::LikedSongs,
                     uri: String::new(),
@@ -573,7 +600,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 entries.push(Entry {
                     image: pick_image(&artist.images, 64).map(str::to_string),
                     name: artist.name.clone(),
-                    subtitle: "Artist".into(),
+                    subtitle: gettext(locale, "Artist").into_owned(),
                     page: Page::Artist(artist.id.clone()),
                     uri: artist.uri.clone(),
                     round: true,

@@ -338,6 +338,13 @@ PNG and exits, which is useful for reproducible interface screenshots.
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
 request. It covers project scope and required checks.
 
+Translations use standard gettext `.po` files in `assets/i18n/`, with an English
+`.pot` template. The current pilot translates navigation and Library labels in
+12 languages, including Portuguese and Chinese variants, in demo mode; the
+production interface remains English. See
+[Translating Fastpotify](docs/_reference/translating.md) for editing with existing
+translation tools, previewing, and reporting translation problems.
+
 Issues and discussions receive automated triage, including reassessment after
 new or edited comments. A rocket on the report or comment means its assessment
 completed successfully; it does not promise a reply or a fix. See

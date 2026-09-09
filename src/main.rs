@@ -39,10 +39,15 @@ struct Cli {
     demo_page: Option<String>,
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
-    /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`, `personal-app`.
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`, `personal-app`, `german`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
+
+    /// Language for the navigation translation pilot. Requires demo mode.
+    #[cfg(feature = "demo")]
+    #[arg(long, value_enum)]
+    demo_language: Option<fastpotify::i18n::Locale>,
 
     /// Write a PNG of the demo window to this path and exit. Implies
     /// `--demo`. Without `--demo-size`, the shot is the window's own frame
@@ -390,6 +395,9 @@ fn main() -> eframe::Result<()> {
     if demo {
         fastpotify::demo::populate(&mut app);
         fastpotify::demo::apply_flags(&mut app, cli.demo_page.as_deref(), cli.demo_show.as_deref());
+        if let Some(locale) = cli.demo_language {
+            app.locale = locale;
+        }
     }
     #[cfg(feature = "demo")]
     let shot = cli.demo_shot.clone().map(|path| Shot {
