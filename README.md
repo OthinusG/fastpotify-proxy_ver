@@ -198,9 +198,10 @@ verified personal app can complete sign-in while the shared app is busy.
 
 The Web API uses a shared app by default. You can add a personal Spotify
 Development Mode app in Settings → Account for a separate quota. Fastpotify
-still uses the shared app for requests that personal apps do not support. If
-Spotify stays busy and no personal app is configured, Fastpotify points you to
-that setting at most once a day.
+still uses the shared app for requests that personal apps do not support.
+On `main`, after 0.7.1, Premium listeners using shared access see a one-time
+prompt explaining the personal app option, with a button that opens setup.
+Dismissal is remembered across restarts.
 
 ## Account safety
 

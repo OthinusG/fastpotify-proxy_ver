@@ -685,6 +685,8 @@ pub enum Dialog {
     Shortcuts,
     /// The signed-in account is not Premium, so nothing will play.
     PremiumNeeded,
+    /// Introduce personal Spotify apps to eligible listeners once.
+    PersonalAppIntro,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -824,6 +826,7 @@ pub enum Action {
     SignOut,
     /// Add, replace, or remove the optional personal Web API app.
     ConfigurePersonalWebApp,
+    OpenPersonalAppSetup,
     ToggleSidebar,
     ToggleQueuePanel,
     ToggleLyricsPanel,

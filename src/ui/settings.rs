@@ -11,6 +11,7 @@ use crate::theme::{self, Icon, Palette};
 use super::widgets;
 
 const PLAYBACK_DIRTY_ID: &str = "playback-settings-dirty";
+pub(crate) const PERSONAL_APP_FOCUS_ID: &str = "focus-personal-app-setup";
 
 fn section(
     ui: &mut egui::Ui,
@@ -106,6 +107,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut client_id)
+                                .id(egui::Id::new("personal-web-client-id"))
                                 .hint_text(egui::RichText::new("Client ID").color(palette.dim))
                                 .font(theme::regular(13.0))
                                 .frame(egui::Frame::NONE)
@@ -113,6 +115,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         )
                     })
                     .inner;
+                if ui
+                    .data_mut(|data| data.remove_temp::<bool>(egui::Id::new(PERSONAL_APP_FOCUS_ID)))
+                    .unwrap_or(false)
+                {
+                    response.scroll_to_me(Some(Align::Center));
+                    response.request_focus();
+                }
                 if response.changed() {
                     let trimmed = client_id.trim().to_string();
                     app.settings.web_client_id = (!trimmed.is_empty()).then_some(trimmed);

@@ -40,10 +40,6 @@ const TOAST_LIFETIME: Duration = Duration::from_millis(3200);
 /// Match other interface animations. egui subtracts the predicted frame time
 /// from delayed repaints, so 33 ms drives roughly one frame per 16 ms.
 const TOAST_FRAME: Duration = Duration::from_millis(33);
-const PERSONAL_APP_NUDGE_AFTER: Duration = Duration::from_secs(5);
-const PERSONAL_APP_NUDGE_INTERVAL: jiff::SignedDuration = jiff::SignedDuration::from_hours(24);
-const PERSONAL_APP_NUDGE: &str =
-    "Spotify is taking a while. Set up a personal app in Settings for a separate API quota";
 const OPTIMISTIC_HOLD: Duration = Duration::from_millis(2500);
 
 /// How long a newly started context remains visible while Spotify catches up.
@@ -1405,6 +1401,9 @@ impl App {
             }
             AuthStatus::WaitingForBrowser { url } => self.sign_in_url = Some(url.clone()),
             AuthStatus::SignedOut => {
+                if matches!(self.dialog, Some(Dialog::PersonalAppIntro)) {
+                    self.dialog = None;
+                }
                 self.sign_in_url = None;
                 self.web_app = None;
                 self.user = None;
@@ -2040,8 +2039,7 @@ impl App {
         }
         self.toasts
             .retain(|toast| toast.created.elapsed() < TOAST_LIFETIME);
-        let spotify_slow = self.backend.activity().busy(PERSONAL_APP_NUDGE_AFTER);
-        self.maybe_suggest_personal_app(spotify_slow, jiff::Timestamp::now());
+        self.maybe_suggest_personal_app();
 
         if self.settings.check_for_updates
             && !self.offline
@@ -5987,7 +5985,13 @@ impl App {
                 });
             }
             Action::ShowDialog(dialog) => self.dialog = Some(dialog),
-            Action::CloseDialog => self.dialog = None,
+            Action::CloseDialog => {
+                if matches!(self.dialog, Some(Dialog::PersonalAppIntro)) {
+                    self.settings.personal_app_intro_seen = true;
+                    self.settings_dirty = true;
+                }
+                self.dialog = None;
+            }
             Action::CreatePlaylist {
                 name,
                 public,
@@ -6119,6 +6123,18 @@ impl App {
                 self.backend.send(Command::ConfigurePersonalWebApp(
                     self.settings.web_client_id.clone(),
                 ));
+            }
+            Action::OpenPersonalAppSetup => {
+                self.settings.personal_app_intro_seen = true;
+                self.settings_dirty = true;
+                self.dialog = None;
+                self.open(Page::Settings);
+                ctx.data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new(crate::ui::settings::PERSONAL_APP_FOCUS_ID),
+                        true,
+                    );
+                });
             }
             Action::SignOut => {
                 self.backend.send(Command::SignOut);
@@ -6431,18 +6447,25 @@ impl App {
         self.backend.send(Command::CheckForUpdates { manual });
     }
 
-    fn maybe_suggest_personal_app(&mut self, spotify_slow: bool, now: jiff::Timestamp) {
-        if !spotify_slow
-            || self.settings.web_client_id.is_some()
+    fn maybe_suggest_personal_app(&mut self) {
+        if self.settings.personal_app_intro_seen
+            || self
+                .settings
+                .web_client_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+            || self.web_app.is_some()
             || !self.is_connected()
             || self.offline
-            || !personal_app_nudge_due(self.settings.personal_app_nudge_at.as_deref(), now)
+            || self.user.as_ref().and_then(|user| user.product.as_deref()) != Some("premium")
+            || self.dialog.is_some()
+            || self.show_devices
+            || self.settings.winamp_window
+            || self.page() == &Page::Settings
         {
             return;
         }
-        self.settings.personal_app_nudge_at = Some(now.to_string());
-        self.settings_dirty = true;
-        self.toast(PERSONAL_APP_NUDGE);
+        self.dialog = Some(Dialog::PersonalAppIntro);
     }
 
     /// Selected row indices for `page`.
@@ -7044,14 +7067,6 @@ fn increase_playlist_total(playlist: &mut Playlist, added: u32) {
     } else {
         playlist.items_count = Some(TrackCount { total: added });
     }
-}
-
-fn personal_app_nudge_due(last: Option<&str>, now: jiff::Timestamp) -> bool {
-    let Some(last) = last.and_then(|value| value.parse::<jiff::Timestamp>().ok()) else {
-        return true;
-    };
-    let elapsed = now.duration_since(last);
-    elapsed < jiff::SignedDuration::ZERO || elapsed >= PERSONAL_APP_NUDGE_INTERVAL
 }
 
 pub fn engine_config(
@@ -8888,52 +8903,102 @@ mod tests {
     }
 
     #[test]
-    fn slow_spotify_suggests_a_personal_app_once_a_day() {
-        let mut app = test_app("personal-app-nudge");
+    fn premium_listeners_discover_personal_apps_before_requests_slow_down() {
+        let mut app = test_app("personal-app-intro");
         app.auth = AuthStatus::Connected {
             username: "listener".into(),
         };
-        let now: jiff::Timestamp = "2026-09-03T15:00:00Z".parse().unwrap();
-
-        app.maybe_suggest_personal_app(false, now);
-        assert!(app.toasts.is_empty(), "fast requests need no reminder");
-
-        app.maybe_suggest_personal_app(true, now);
-        assert_eq!(app.toasts.len(), 1);
-        assert_eq!(app.toasts[0].message, PERSONAL_APP_NUDGE);
-        assert_eq!(
-            app.settings.personal_app_nudge_at.as_deref(),
-            Some("2026-09-03T15:00:00Z")
-        );
-        assert!(app.settings_dirty, "the reminder time must be persisted");
-
-        app.maybe_suggest_personal_app(true, now + jiff::SignedDuration::from_hours(23));
-        assert_eq!(app.toasts.len(), 1, "the reminder must stay quiet today");
-
-        app.maybe_suggest_personal_app(true, now + PERSONAL_APP_NUDGE_INTERVAL);
-        assert_eq!(app.toasts.len(), 2, "the reminder returns after a day");
+        app.user = Some(User {
+            product: Some("premium".into()),
+            ..User::default()
+        });
+        // Having seen an old transient toast does not count as seeing the intro.
+        app.settings.personal_app_nudge_at = Some("2026-09-09T10:00:00Z".into());
+        app.maybe_suggest_personal_app();
+        assert!(matches!(app.dialog, Some(Dialog::PersonalAppIntro)));
+        assert!(!app.settings.personal_app_intro_seen);
+        app.actions.push(Action::CloseDialog);
+        app.apply_actions(&egui::Context::default());
+        assert!(app.settings.personal_app_intro_seen);
+        assert!(app.dialog.is_none());
+        let saved = serde_json::to_string(&app.settings).unwrap();
+        let mut restarted = test_app("personal-app-intro-restart");
+        restarted.settings = serde_json::from_str(&saved).unwrap();
+        restarted.auth = app.auth.clone();
+        restarted.user = app.user.clone();
+        restarted.maybe_suggest_personal_app();
+        assert!(restarted.dialog.is_none(), "dismissal survives a restart");
+        assert!(app.toasts.is_empty(), "the old daily reminder is replaced");
     }
 
     #[test]
-    fn configured_personal_app_suppresses_the_slow_spotify_reminder() {
-        let mut app = test_app("personal-app-nudge-configured");
+    fn personal_app_intro_waits_for_a_premium_account_using_shared_access() {
+        let mut app = test_app("personal-app-intro-eligibility");
         app.auth = AuthStatus::Connected {
             username: "listener".into(),
         };
+        for product in [None, Some("free"), Some("open")] {
+            app.user = Some(User {
+                product: product.map(str::to_string),
+                ..User::default()
+            });
+            app.maybe_suggest_personal_app();
+            assert!(app.dialog.is_none());
+        }
+        app.user = Some(User {
+            product: Some("premium".into()),
+            ..User::default()
+        });
         app.settings.web_client_id = Some("personal-client".into());
-
-        app.maybe_suggest_personal_app(true, jiff::Timestamp::now());
-
-        assert!(app.toasts.is_empty());
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.settings.web_client_id = None;
+        app.web_app = Some("personal-client".into());
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.web_app = None;
+        app.auth = AuthStatus::SignedOut;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.auth = AuthStatus::Connected {
+            username: "listener".into(),
+        };
+        app.offline = true;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
     }
 
     #[test]
-    fn missing_invalid_and_future_nudge_times_do_not_hide_the_reminder() {
-        let now: jiff::Timestamp = "2026-09-03T15:00:00Z".parse().unwrap();
-
-        assert!(personal_app_nudge_due(None, now));
-        assert!(personal_app_nudge_due(Some("not a timestamp"), now));
-        assert!(personal_app_nudge_due(Some("2026-09-04T15:00:00Z"), now));
+    fn personal_app_intro_defers_while_another_surface_is_in_use() {
+        let mut app = test_app("personal-app-intro-defer");
+        app.auth = AuthStatus::Connected {
+            username: "listener".into(),
+        };
+        app.user = Some(User {
+            product: Some("premium".into()),
+            ..User::default()
+        });
+        app.dialog = Some(Dialog::Shortcuts);
+        app.maybe_suggest_personal_app();
+        assert!(matches!(app.dialog, Some(Dialog::Shortcuts)));
+        app.dialog = None;
+        app.show_devices = true;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.show_devices = false;
+        app.settings.winamp_window = true;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.settings.winamp_window = false;
+        app.open(Page::Settings);
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.open(Page::Home);
+        app.maybe_suggest_personal_app();
+        assert!(matches!(app.dialog, Some(Dialog::PersonalAppIntro)));
+        app.handle_auth(AuthStatus::SignedOut);
+        assert!(app.dialog.is_none());
+        assert!(!app.settings.personal_app_intro_seen);
     }
 
     fn play(uri: &str, at: &str) -> crate::api::models::PlayHistory {

@@ -630,6 +630,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     url: "https://fastpotify.rocks/download/".into(),
                 });
             }
+            "personal-app" => app.dialog = Some(Dialog::PersonalAppIntro),
             "many-devices" => {
                 app.show_devices = true;
                 app.devices.extend((0..40).map(|index| Device {
@@ -946,6 +947,53 @@ mod tests {
             "focused Space must pause once, without firing the global shortcut too"
         );
         assert_eq!(tree.focus, pause);
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn personal_app_intro_can_be_dismissed_or_open_setup_with_keyboard_focus() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+
+        for setup in [false, true] {
+            let (ctx, mut app) = accessible_app(&format!("personal-app-intro-{setup}"));
+            app.dialog = Some(Dialog::PersonalAppIntro);
+            accessible_frame(&ctx, &mut app, vec![]);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let button = accessible_node(
+                &tree,
+                if setup {
+                    "Set up personal app"
+                } else {
+                    "Keep shared app"
+                },
+                Role::Button,
+            );
+            accessible_frame(
+                &ctx,
+                &mut app,
+                vec![accessible_action(button, AccessibleAction::Click, None)],
+            );
+            assert!(app.dialog.is_none());
+            assert!(app.settings.personal_app_intro_seen);
+            if setup {
+                assert_eq!(app.page(), &Page::Settings);
+                accessible_frame(&ctx, &mut app, vec![]);
+                assert!(
+                    ctx.memory(|memory| memory.has_focus(egui::Id::new("personal-web-client-id")))
+                );
+            }
+            app.backend.shutdown();
+        }
+        let (ctx, mut app) = accessible_app("personal-app-intro-escape");
+        app.dialog = Some(Dialog::PersonalAppIntro);
+        accessible_frame(&ctx, &mut app, vec![]);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![keyboard(egui::Key::Escape, egui::Modifiers::NONE)],
+        );
+        assert!(app.dialog.is_none());
+        assert!(app.settings.personal_app_intro_seen);
         app.backend.shutdown();
     }
 

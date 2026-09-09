@@ -42,6 +42,9 @@ By default, Fastpotify uses the public app shared with spotify-player, ncspot,
 and Omarchy Spotify. Spotify divides its quota among all users. A personal app
 adds a separate Development Mode quota. See
 [Use a Personal Spotify App](/make-it-even-faster/).
+On `main`, after 0.7.1, verified Premium accounts using shared access see a
+one-time introduction to that option. Setup and dismissal are remembered in
+settings. The prompt uses the existing account profile and adds no request.
 
 ## What the client stores
 
