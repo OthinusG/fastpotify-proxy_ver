@@ -53,8 +53,50 @@ jobs:
           fi
 
           if ! git merge-base --is-ancestor upstream/main HEAD; then
-            git merge --no-edit upstream/main
+            if ! git merge --no-edit upstream/main; then
+              conflicts="$(git diff --name-only --diff-filter=U)"
+
+              if [[ "$conflicts" != "flake.nix" ]]; then
+                echo "::error::Upstream merge has conflicts that require manual resolution:"
+                printf '%s\n' "$conflicts"
+                git merge --abort
+                exit 1
+              fi
+
+              ours="$(mktemp)"
+              theirs="$(mktemp)"
+              ours_normalized="$(mktemp)"
+              theirs_normalized="$(mktemp)"
+              trap 'rm -f "$ours" "$theirs" "$ours_normalized" "$theirs_normalized"' EXIT
+
+              git show :2:flake.nix > "$ours"
+              git show :3:flake.nix > "$theirs"
+
+              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' \
+                "$ours" > "$ours_normalized"
+              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' \
+                "$theirs" > "$theirs_normalized"
+
+              if ! cmp -s "$ours_normalized" "$theirs_normalized"; then
+                echo "::error::flake.nix differs beyond the Nix vendor hash; refusing automatic resolution."
+                git merge --abort
+                exit 1
+              fi
+
+              echo "flake.nix conflicts only in the Nix vendor hash; keeping the proxy fork value."
+              git checkout --ours -- flake.nix
+              git add flake.nix
+
+              if git diff --name-only --diff-filter=U | grep -q .; then
+                echo "::error::Unresolved merge conflicts remain."
+                git merge --abort
+                exit 1
+              fi
+
+              git commit --no-edit
+            fi
           fi
+
           git tag "$tag"
           git push --atomic origin HEAD:main "refs/tags/$tag"
           echo "release=true" >> "$GITHUB_OUTPUT"
