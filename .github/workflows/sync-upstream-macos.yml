@@ -127,7 +127,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   macos:
-    name: macOS universal
+    name: Fastpotify Proxy · macOS universal
     needs: sync
     if: needs.sync.outputs.release == 'true'
     runs-on: macos-latest
@@ -142,7 +142,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: proxy-macos-universal
-      - name: Build universal app
+      - name: Build Fastpotify Proxy universal app
         run: |
           set -euo pipefail
           cargo build --release --locked --target aarch64-apple-darwin
@@ -154,22 +154,22 @@ jobs:
             -output universal/fastpotify
           version="${{ needs.sync.outputs.tag }}"
           version="${version#v}"
-          bash packaging/macos/bundle.sh universal/fastpotify Fastpotify.app "$version"
+          bash packaging/macos/bundle.sh universal/fastpotify "Fastpotify Proxy.app" "$version"
           stage="$RUNNER_TEMP/dmg"
           mkdir -p "$stage"
-          cp -R Fastpotify.app "$stage/"
+          cp -R "Fastpotify Proxy.app" "$stage/"
           cp README.md LICENSE "$stage/"
           ln -s /Applications "$stage/Applications"
           hdiutil create -volname "Fastpotify Proxy" -srcfolder "$stage" -ov \
             -format UDZO "dist/fastpotify-proxy-${{ needs.sync.outputs.tag }}-macos-universal.dmg"
       - uses: actions/upload-artifact@v7
         with:
-          name: macos-universal
+          name: fastpotify-proxy-macos-universal
           path: dist/*.dmg
           if-no-files-found: error
 
   windows:
-    name: Windows x64
+    name: Fastpotify Proxy · Windows x64
     needs: sync
     if: needs.sync.outputs.release == 'true'
     runs-on: windows-latest
@@ -202,12 +202,12 @@ jobs:
           Compress-Archive -Path "$stage\*" -DestinationPath "dist\$stage.zip" -Force
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-x64
+          name: fastpotify-proxy-windows-x64
           path: dist/*.zip
           if-no-files-found: error
 
   linux:
-    name: Linux x64 deb
+    name: Fastpotify Proxy · Linux x64 deb
     needs: sync
     if: needs.sync.outputs.release == 'true'
     runs-on: ubuntu-latest
@@ -253,7 +253,7 @@ jobs:
           Architecture: amd64
           Maintainer: OthinusG
           Depends: libc6, libasound2, libpulse0, libxkbcommon0, libwayland-client0, libgl1, libx11-6, libxcursor1, libxi6, libxrandr2
-          Description: Fastpotify native Spotify client with HTTP proxy support
+          Description: Fastpotify Proxy native Spotify client with HTTP proxy support
            Downstream proxy-enabled build synchronized with upstream Fastpotify.
           EOF
 
@@ -261,12 +261,12 @@ jobs:
             "dist/fastpotify-proxy-${{ needs.sync.outputs.tag }}-linux-x64.deb"
       - uses: actions/upload-artifact@v7
         with:
-          name: linux-x64-deb
+          name: fastpotify-proxy-linux-x64-deb
           path: dist/*.deb
           if-no-files-found: error
 
   release:
-    name: Publish release
+    name: Publish Fastpotify Proxy release
     needs: [sync, macos, windows, linux]
     if: ${{ needs.sync.outputs.release == 'true' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
@@ -279,7 +279,7 @@ jobs:
         run: |
           cd dist
           sha256sum * > checksums.txt
-      - name: Remove superseded release assets
+      - name: Remove superseded and duplicate release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
