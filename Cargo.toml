@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 description = "A native Spotify client"
-repository = "https://github.com/crmne/fastpotify"
+repository = "https://github.com/OthinusG/fastpotify-proxy_ver"
 keywords = ["spotify", "music", "egui", "librespot", "player"]
 categories = ["multimedia::audio"]
 
@@ -134,7 +134,7 @@ windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globali
 # MilkDrop. This is the same crate already compiled by eframe and winit.
 raw-window-handle = "0.6"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(target_os = "linux"))'.dependencies]
 # Reuses the zbus/Tokio stack already used for desktop integration.
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 ksni = { version = "0.3", features = ["blocking"] }
