@@ -41,7 +41,10 @@ jobs:
           git fetch upstream main
 
           if ! git merge-base --is-ancestor upstream/main HEAD; then
-            if ! git merge --no-edit upstream/main; then
+            # Stop before committing so downstream-only workflows can always be
+            # restored before the merge commit is created. GitHub's Actions token
+            # cannot push upstream workflow-file changes back to this repository.
+            if ! git merge --no-commit --no-ff upstream/main; then
               conflicts="$(git diff --name-only --diff-filter=U)"
 
               if [[ "$conflicts" != "flake.nix" ]]; then
@@ -80,9 +83,12 @@ jobs:
                 git merge --abort
                 exit 1
               fi
-
-              git commit --no-edit
             fi
+
+            # Keep this fork's CI/sync/release workflows. Upstream application
+            # code is merged normally, but upstream workflow changes are ignored.
+            git restore --source=HEAD --staged --worktree -- .github/workflows
+            git commit --no-edit
           fi
 
           version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
