@@ -142,6 +142,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: proxy-macos-universal
+      - name: Prepare Fastpotify Proxy runtime identity
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/single_instance.rs")
+          text = path.read_text()
+          old = "const INSTANCE_PORT: u16 = 47_113;"
+          new = "const INSTANCE_PORT: u16 = 47_114;"
+          if old not in text:
+              raise SystemExit("expected Fastpotify single-instance port marker was not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Build Fastpotify Proxy universal app
         run: |
           set -euo pipefail
@@ -152,9 +165,22 @@ jobs:
             target/aarch64-apple-darwin/release/fastpotify \
             target/x86_64-apple-darwin/release/fastpotify \
             -output universal/fastpotify
+
+          strings universal/fastpotify > "$RUNNER_TEMP/fastpotify-proxy-strings.txt"
+          if ! grep -Fq "HTTP proxy server" "$RUNNER_TEMP/fastpotify-proxy-strings.txt" \
+            || ! grep -Fq "Proxy status" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"; then
+            echo "::error::Built macOS binary is missing the Proxy settings GUI markers."
+            exit 1
+          fi
+
           version="${{ needs.sync.outputs.tag }}"
           version="${version#v}"
           bash packaging/macos/bundle.sh universal/fastpotify "Fastpotify Proxy.app" "$version"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'Fastpotify Proxy.app/Contents/Info.plist')"
+          if [[ "$bundle_id" != "com.othinusg.fastpotify.proxy" ]]; then
+            echo "::error::Unexpected Fastpotify Proxy bundle identifier: $bundle_id"
+            exit 1
+          fi
           stage="$RUNNER_TEMP/dmg"
           mkdir -p "$stage"
           cp -R "Fastpotify Proxy.app" "$stage/"
@@ -190,6 +216,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: proxy-windows-x64
+      - name: Prepare Fastpotify Proxy runtime identity
+        shell: pwsh
+        run: |
+          $path = "src\single_instance.rs"
+          $text = [IO.File]::ReadAllText($path)
+          $old = "const INSTANCE_PORT: u16 = 47_113;"
+          if (-not $text.Contains($old)) {
+            throw "expected Fastpotify single-instance port marker was not found"
+          }
+          [IO.File]::WriteAllText($path, $text.Replace($old, "const INSTANCE_PORT: u16 = 47_114;"))
       - name: Build and package
         shell: pwsh
         run: |
