@@ -86,12 +86,29 @@ jobs:
             git commit --no-edit
           fi
 
-          # Every fork-specific modification is re-applied and verified after
-          # the upstream merge, before anything is tagged or built.
+          # Re-apply every fork-specific source customization after the merge.
           python3 .github/downstream/apply_proxy_customizations.py
 
-          if ! git diff --quiet; then
-            git add Cargo.toml src/updates.rs packaging/macos/Info.plist src/ui/settings.rs
+          # The patcher must be idempotent: a second run may not alter the diff.
+          patch_hash() {
+            { git diff --binary; git diff --cached --binary; } | sha256sum | awk '{print $1}'
+          }
+          first_hash="$(patch_hash)"
+          python3 .github/downstream/apply_proxy_customizations.py
+          second_hash="$(patch_hash)"
+          if [[ "$first_hash" != "$second_hash" ]]; then
+            echo "::error::Downstream patcher is not idempotent."
+            exit 1
+          fi
+
+          # Restore the patched proxy transport in Cargo.lock if upstream
+          # replaced it with the crates.io hyper-proxy2 entry.
+          if ! grep -Fq 'git+https://github.com/siketyan/hyper-proxy2?rev=2a1a9845f4c9a100c45bf3dc0f1222773d5a33b7' Cargo.lock; then
+            cargo update -p hyper-proxy2@0.1.0
+          fi
+
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git add -A
             git commit -m "Reapply Fastpotify Proxy downstream customizations"
           fi
 
@@ -152,22 +169,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: proxy-macos-universal
-      - name: Prepare Fastpotify Proxy runtime identity
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("src/single_instance.rs")
-          text = path.read_text()
-          old = "const INSTANCE_PORT: u16 = 47_113;"
-          new = "const INSTANCE_PORT: u16 = 47_114;"
-          if old not in text:
-              raise SystemExit("expected Fastpotify single-instance port marker was not found")
-          path.write_text(text.replace(old, new, 1))
-          PY
       - name: Build Fastpotify Proxy universal app
         run: |
           set -euo pipefail
+          grep -Fq 'const INSTANCE_PORT: u16 = 47_114;' src/single_instance.rs
           cargo build --release --locked --target aarch64-apple-darwin
           cargo build --release --locked --target x86_64-apple-darwin
           mkdir -p universal dist
@@ -227,19 +232,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: proxy-windows-x64
-      - name: Prepare Fastpotify Proxy runtime identity
-        shell: pwsh
-        run: |
-          $path = "src\single_instance.rs"
-          $text = [IO.File]::ReadAllText($path)
-          $old = "const INSTANCE_PORT: u16 = 47_113;"
-          if (-not $text.Contains($old)) {
-            throw "expected Fastpotify single-instance port marker was not found"
-          }
-          [IO.File]::WriteAllText($path, $text.Replace($old, "const INSTANCE_PORT: u16 = 47_114;"))
       - name: Build and package
         shell: pwsh
         run: |
+          if (-not (Select-String -Path "src\single_instance.rs" -SimpleMatch "const INSTANCE_PORT: u16 = 47_114;")) {
+            throw "Fastpotify Proxy single-instance port was not re-applied"
+          }
           cargo build --release --locked --target x86_64-pc-windows-msvc
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $stage = "fastpotify-proxy-${{ needs.sync.outputs.tag }}-windows-x64"
