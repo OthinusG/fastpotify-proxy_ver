@@ -129,7 +129,7 @@ pub const NO_DEVICES: &str = "[]";
 /// Loopback port that marks a running instance on platforms without a bus.
 /// Registered to nothing; chosen high and out of the ephemeral range.
 #[cfg(not(target_os = "linux"))]
-const INSTANCE_PORT: u16 = 47_113;
+const INSTANCE_PORT: u16 = 47_114;
 
 /// Every request and reply starts with this, so a foreign program that
 /// happens to hold the port is never mistaken for Fastpotify.
