@@ -1,21 +1,22 @@
-name: Sync upstream and release macOS
+name: Sync upstream and release
 
 on:
   push:
     branches: [main]
   schedule:
-    - cron: "17 * * * *"
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: sync-upstream-macos
-  cancel-in-progress: false
+  group: sync-upstream-release
+  cancel-in-progress: true
 
 env:
   UPSTREAM_REPOSITORY: crmne/fastpotify
+  CARGO_TERM_COLOR: always
 
 jobs:
   sync:
@@ -23,12 +24,14 @@ jobs:
     outputs:
       release: ${{ steps.sync.outputs.release }}
       tag: ${{ steps.sync.outputs.tag }}
+      build_sha: ${{ steps.sync.outputs.build_sha }}
+      short_sha: ${{ steps.sync.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Merge upstream main
+      - name: Merge upstream and reapply downstream customizations
         id: sync
         shell: bash
         env:
@@ -40,37 +43,142 @@ jobs:
           git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
           git fetch upstream main
 
-          upstream_sha="$(git rev-parse upstream/main)"
-          tag="proxy-${upstream_sha:0:12}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            if gh release view "$tag" >/dev/null 2>&1; then
-              echo "release=false" >> "$GITHUB_OUTPUT"
-              exit 0
+          if ! git merge-base --is-ancestor upstream/main HEAD; then
+            if ! git merge --no-commit --no-ff upstream/main; then
+              conflicts="$(git diff --name-only --diff-filter=U)"
+
+              if [[ "$conflicts" != "flake.nix" ]]; then
+                echo "::error::Upstream merge has conflicts that require manual resolution:"
+                printf '%s\n' "$conflicts"
+                git merge --abort
+                exit 1
+              fi
+
+              ours="$(mktemp)"
+              theirs="$(mktemp)"
+              ours_normalized="$(mktemp)"
+              theirs_normalized="$(mktemp)"
+              trap 'rm -f "$ours" "$theirs" "$ours_normalized" "$theirs_normalized"' EXIT
+
+              git show :2:flake.nix > "$ours"
+              git show :3:flake.nix > "$theirs"
+              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' "$ours" > "$ours_normalized"
+              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' "$theirs" > "$theirs_normalized"
+
+              if ! cmp -s "$ours_normalized" "$theirs_normalized"; then
+                echo "::error::flake.nix differs beyond the Nix vendor hash; refusing automatic resolution."
+                git merge --abort
+                exit 1
+              fi
+
+              echo "flake.nix conflicts only in the Nix vendor hash; keeping the proxy fork value."
+              git checkout --ours -- flake.nix
+              git add flake.nix
             fi
-            echo "release=true" >> "$GITHUB_OUTPUT"
+
+            # Never let upstream replace the fork's CI/release automation.
+            git restore --source=HEAD --staged --worktree -- .github/workflows
+
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              echo "::error::Unresolved merge conflicts remain."
+              git merge --abort
+              exit 1
+            fi
+
+            git commit --no-edit
+          fi
+
+          # Re-apply every fork-specific source customization after the merge.
+          python3 .github/downstream/apply_proxy_customizations.py
+
+          # The patcher must be idempotent: a second run may not alter the diff.
+          patch_hash() {
+            { git diff --binary; git diff --cached --binary; } | sha256sum | awk '{print $1}'
+          }
+          first_hash="$(patch_hash)"
+          python3 .github/downstream/apply_proxy_customizations.py
+          second_hash="$(patch_hash)"
+          if [[ "$first_hash" != "$second_hash" ]]; then
+            echo "::error::Downstream patcher is not idempotent."
+            exit 1
+          fi
+
+          # Restore the patched proxy transport in Cargo.lock if upstream
+          # replaced it with the crates.io hyper-proxy2 entry.
+          if ! grep -Fq 'git+https://github.com/siketyan/hyper-proxy2?rev=2a1a9845f4c9a100c45bf3dc0f1222773d5a33b7' Cargo.lock; then
+            cargo update -p hyper-proxy2@0.1.0
+          fi
+
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git add -A
+            git commit -m "Reapply Fastpotify Proxy downstream customizations"
+          fi
+
+          version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+          if [[ -z "$version" ]]; then
+            echo "::error::Unable to read package version from Cargo.toml"
+            exit 1
+          fi
+          tag="v${version}"
+          head_sha="$(git rev-parse HEAD)"
+          short_sha="${head_sha:0:8}"
+
+          echo "build_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+
+          git push origin HEAD:main
+
+          # Asset names include the immutable source revision. Reusing the same
+          # tag/version must never let a browser or CDN return an older build.
+          mac="fastpotify-proxy-${tag}-${short_sha}-macos-universal.dmg"
+          win="fastpotify-proxy-${tag}-${short_sha}-windows-x64.zip"
+          deb="fastpotify-proxy-${tag}-${short_sha}-linux-x64.deb"
+          tag_sha="$(git ls-remote --tags origin "refs/tags/$tag" | awk '{print $1}')"
+
+          release_complete=false
+          if gh release view "$tag" >/dev/null 2>&1; then
+            assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+            if grep -Fxq "$mac" <<< "$assets" \
+              && grep -Fxq "$win" <<< "$assets" \
+              && grep -Fxq "$deb" <<< "$assets"; then
+              release_complete=true
+            fi
+          fi
+
+          if [[ "$tag_sha" == "$head_sha" && "$release_complete" == true ]]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if ! git merge-base --is-ancestor upstream/main HEAD; then
-            # Keep the downstream overlay when upstream edits the same files.
-            # Non-conflicting upstream hunks still merge normally.
-            git merge --no-edit -X ours upstream/main
+          if [[ -n "$tag_sha" ]]; then
+            git tag -f "$tag" "$head_sha"
+            git push --force origin "refs/tags/$tag"
+          else
+            git tag "$tag" "$head_sha"
+            git push origin "refs/tags/$tag"
           fi
-          sed -i 's#https://github.com/crmne/fastpotify#https://github.com/OthinusG/fastpotify-proxy_ver#g' Cargo.toml src/updates.rs
-          git tag "$tag"
-          git push --atomic origin HEAD:main "refs/tags/$tag"
+
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   macos:
+    name: Fastpotify Proxy · macOS universal
     needs: sync
     if: needs.sync.outputs.release == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.sync.outputs.tag }}
+          # Build the exact post-merge/post-patch commit, never a mutable tag.
+          ref: ${{ needs.sync.outputs.build_sha }}
+      - name: Verify immutable source revision
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.sync.outputs.build_sha }}"
+          grep -Fq 'const INSTANCE_PORT: u16 = 47_114;' src/single_instance.rs
+          grep -Fq 'section(ui, &palette, "Proxy", |ui| {' src/ui/settings.rs
+          grep -Fq 'repository = "https://github.com/OthinusG/fastpotify-proxy_ver"' Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -78,39 +186,234 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: proxy-macos-universal
-
-      - name: Build universal app
+      - name: Build Fastpotify Proxy universal app
         run: |
           set -euo pipefail
           cargo build --release --locked --target aarch64-apple-darwin
           cargo build --release --locked --target x86_64-apple-darwin
-          mkdir -p universal
+          mkdir -p universal dist
           lipo -create \
             target/aarch64-apple-darwin/release/fastpotify \
             target/x86_64-apple-darwin/release/fastpotify \
             -output universal/fastpotify
-          version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
-          bash packaging/macos/bundle.sh \
-            universal/fastpotify Fastpotify.app "$version"
 
-      - name: Package DMG
-        run: |
-          set -euo pipefail
-          name="fastpotify-${{ needs.sync.outputs.tag }}-macos-universal"
+          verify_binary() {
+            local binary="$1"
+            local strings_file="$RUNNER_TEMP/$(basename "$binary").strings"
+            strings "$binary" > "$strings_file"
+            grep -Fq "HTTP proxy server" "$strings_file"
+            grep -Fq "Proxy status" "$strings_file"
+            grep -Fq "github.com/OthinusG/fastpotify-proxy_ver" "$strings_file"
+          }
+
+          # Verify the compiled binary before packaging.
+          verify_binary universal/fastpotify
+
+          version="${{ needs.sync.outputs.tag }}"
+          version="${version#v}"
+          bash packaging/macos/bundle.sh universal/fastpotify "Fastpotify Proxy.app" "$version"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'Fastpotify Proxy.app/Contents/Info.plist')"
+          if [[ "$bundle_id" != "com.othinusg.fastpotify.proxy" ]]; then
+            echo "::error::Unexpected Fastpotify Proxy bundle identifier: $bundle_id"
+            exit 1
+          fi
+
+          # Verify the binary after bundle.sh has copied and signed it.
+          verify_binary "Fastpotify Proxy.app/Contents/MacOS/fastpotify"
+
           stage="$RUNNER_TEMP/dmg"
-          mkdir -p "$stage" dist
-          cp -R Fastpotify.app "$stage/"
+          mkdir -p "$stage"
+          cp -R "Fastpotify Proxy.app" "$stage/"
           cp README.md LICENSE "$stage/"
           ln -s /Applications "$stage/Applications"
-          hdiutil create -volname Fastpotify -srcfolder "$stage" -ov \
-            -format UDZO "dist/$name.dmg"
-          shasum -a 256 dist/*.dmg > dist/checksums.txt
+          dmg="dist/fastpotify-proxy-${{ needs.sync.outputs.tag }}-${{ needs.sync.outputs.short_sha }}-macos-universal.dmg"
+          hdiutil create -volname "Fastpotify Proxy" -srcfolder "$stage" -ov -format UDZO "$dmg"
 
+          # Mount the final DMG and verify the binary the user will actually run.
+          mount_dir="$RUNNER_TEMP/verify-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
+          verify_binary "$mount_dir/Fastpotify Proxy.app/Contents/MacOS/fastpotify"
+          mounted_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$mount_dir/Fastpotify Proxy.app/Contents/Info.plist")"
+          test "$mounted_bundle_id" = "com.othinusg.fastpotify.proxy"
+          hdiutil detach "$mount_dir" >/dev/null
+          trap - EXIT
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fastpotify-proxy-macos-universal-${{ needs.sync.outputs.short_sha }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Fastpotify Proxy · Windows x64
+    needs: sync
+    if: needs.sync.outputs.release == 'true'
+    runs-on: windows-latest
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.build_sha }}
+      - name: Verify immutable source revision
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne "${{ needs.sync.outputs.build_sha }}") { throw "Wrong source revision checked out" }
+          if (-not (Select-String -Path "src\single_instance.rs" -SimpleMatch "const INSTANCE_PORT: u16 = 47_114;")) { throw "Proxy single-instance identity missing" }
+          if (-not (Select-String -Path "src\ui\settings.rs" -SimpleMatch 'section(ui, &palette, "Proxy", |ui| {')) { throw "Proxy settings UI missing from source" }
+          if (-not (Select-String -Path "Cargo.toml" -SimpleMatch 'repository = "https://github.com/OthinusG/fastpotify-proxy_ver"')) { throw "Proxy repository metadata missing" }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: rustup target add x86_64-pc-windows-msvc
+      - name: GLEW for libprojectM
+        run: vcpkg install glew:x64-windows-static
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: proxy-windows-x64
+      - name: Build and package
+        shell: pwsh
+        run: |
+          cargo build --release --locked --target x86_64-pc-windows-msvc
+          $exe = "target\x86_64-pc-windows-msvc\release\fastpotify.exe"
+          $binaryText = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($exe))
+          foreach ($marker in @("HTTP proxy server", "Proxy status", "github.com/OthinusG/fastpotify-proxy_ver")) {
+            if (-not $binaryText.Contains($marker)) { throw "Built Windows binary is missing marker: $marker" }
+          }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $stage = "fastpotify-proxy-${{ needs.sync.outputs.tag }}-${{ needs.sync.outputs.short_sha }}-windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $exe "$stage\fastpotify.exe"
+          Copy-Item README.md, LICENSE $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist\$stage.zip" -Force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fastpotify-proxy-windows-x64-${{ needs.sync.outputs.short_sha }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Fastpotify Proxy · Linux x64 deb
+    needs: sync
+    if: needs.sync.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.build_sha }}
+      - name: Verify immutable source revision
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.sync.outputs.build_sha }}"
+          grep -Fq 'section(ui, &palette, "Proxy", |ui| {' src/ui/settings.rs
+          grep -Fq 'repository = "https://github.com/OthinusG/fastpotify-proxy_ver"' Cargo.toml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
+            libwayland-dev libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev \
+            libxrandr-dev cmake libclang-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: proxy-linux-x64
+      - name: Build Debian package
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target x86_64-unknown-linux-gnu
+
+          binary="target/x86_64-unknown-linux-gnu/release/fastpotify"
+          strings "$binary" > "$RUNNER_TEMP/fastpotify-proxy-strings.txt"
+          grep -Fq "HTTP proxy server" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"
+          grep -Fq "Proxy status" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"
+          grep -Fq "github.com/OthinusG/fastpotify-proxy_ver" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"
+
+          version="${{ needs.sync.outputs.tag }}"
+          version="${version#v}"
+          root="$RUNNER_TEMP/fastpotify-deb"
+          mkdir -p "$root/DEBIAN" "$root/usr/bin" \
+            "$root/usr/share/applications" \
+            "$root/usr/share/icons/hicolor/scalable/apps" dist
+
+          install -m755 "$binary" "$root/usr/bin/fastpotify"
+          install -m644 packaging/applications/fastpotify.desktop \
+            "$root/usr/share/applications/fastpotify.desktop"
+          install -m644 packaging/icons/fastpotify.svg \
+            "$root/usr/share/icons/hicolor/scalable/apps/fastpotify.svg"
+
+          cat > "$root/DEBIAN/control" <<EOF
+          Package: fastpotify
+          Version: $version
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Maintainer: OthinusG
+          Depends: libc6, libasound2, libpulse0, libxkbcommon0, libwayland-client0, libgl1, libx11-6, libxcursor1, libxi6, libxrandr2
+          Description: Fastpotify Proxy native Spotify client with HTTP proxy support
+           Downstream proxy-enabled build synchronized with upstream Fastpotify.
+          EOF
+
+          dpkg-deb --build --root-owner-group "$root" \
+            "dist/fastpotify-proxy-${{ needs.sync.outputs.tag }}-${{ needs.sync.outputs.short_sha }}-linux-x64.deb"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fastpotify-proxy-linux-x64-deb-${{ needs.sync.outputs.short_sha }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish Fastpotify Proxy release
+    needs: [sync, macos, windows, linux]
+    if: ${{ needs.sync.outputs.release == 'true' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Build provenance and checksums
+        run: |
+          set -euo pipefail
+          cat > dist/build-info.txt <<EOF
+          Fastpotify Proxy
+          Version: ${{ needs.sync.outputs.tag }}
+          Source commit: ${{ needs.sync.outputs.build_sha }}
+          EOF
+          cd dist
+          sha256sum fastpotify-proxy-* > checksums.txt
+      - name: Remove superseded release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.sync.outputs.tag }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            while IFS= read -r asset; do
+              case "$asset" in
+                fastpotify-*|checksums.txt|build-info.txt)
+                  gh release delete-asset "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --yes || true
+                  ;;
+              esac
+            done < <(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.sync.outputs.tag }}
-          name: Fastpotify proxy build ${{ needs.sync.outputs.tag }}
-          body: Automatic macOS build of the latest upstream main with HTTP proxy support.
-          files: |
-            dist/*.dmg
-            dist/checksums.txt
+          name: Fastpotify Proxy ${{ needs.sync.outputs.tag }} · ${{ needs.sync.outputs.short_sha }}
+          body: |
+            Automatic proxy-enabled build synchronized with upstream Fastpotify.
+
+            Source commit: `${{ needs.sync.outputs.build_sha }}`
+
+            Every platform package is built from this exact post-merge, post-patch commit and verified to contain the Proxy settings UI and this fork's source-code URL.
+
+            Included downloads:
+            - Fastpotify Proxy macOS universal DMG (Apple Silicon + Intel)
+            - Fastpotify Proxy Windows x64 ZIP
+            - Fastpotify Proxy Linux x64 Debian package
+          files: dist/*

@@ -56,6 +56,8 @@ pub enum Outcome {
 pub enum ControlCommand {
     /// Bring the window forward, creating it if needed.
     Show,
+    /// Exit so a different downstream build can replace this instance.
+    QuitForUpdate,
     PlayPause,
     Play,
     Pause,
@@ -129,7 +131,18 @@ pub const NO_DEVICES: &str = "[]";
 /// Loopback port that marks a running instance on platforms without a bus.
 /// Registered to nothing; chosen high and out of the ephemeral range.
 #[cfg(not(target_os = "linux"))]
-const INSTANCE_PORT: u16 = 47_113;
+#[allow(dead_code)]
+const INSTANCE_PORT: u16 = 47_114;
+
+/// Runtime guard for the downstream Proxy build. Kept separate from the
+/// historical 47114 marker so an older installed Proxy cannot surface itself
+/// when a newer package is launched.
+#[cfg(not(target_os = "linux"))]
+const PROXY_INSTANCE_PORT: u16 = 47_115;
+
+/// Exact source commit embedded by build.rs.
+#[cfg(not(target_os = "linux"))]
+const BUILD_ID: &str = env!("FASTPOTIFY_PROXY_BUILD_SHA");
 
 /// Every request and reply starts with this, so a foreign program that
 /// happens to hold the port is never mistaken for Fastpotify.
@@ -141,6 +154,7 @@ const OK_REPLY: &str = "fastpotify:ok";
 const NOW_REPLY: &str = "fastpotify:now ";
 #[cfg(not(target_os = "linux"))]
 const DEVICES_REPLY: &str = "fastpotify:devices ";
+const BUILD_REPLY: &str = "fastpotify:build ";
 
 /// What the running instance said back.
 #[cfg(not(target_os = "linux"))]
@@ -155,12 +169,14 @@ pub enum Reply {
     /// `kind`, and `active`, or [`NO_DEVICES`]. JSON safely carries free-text
     /// device names.
     Devices(String),
+    /// Exact build id of the running downstream instance.
+    Build(String),
 }
 
 /// Sends one verb to the running instance and reads its reply.
 #[cfg(not(target_os = "linux"))]
 pub fn send(verb: &str) -> std::io::Result<Reply> {
-    send_to(INSTANCE_PORT, verb)
+    send_to(PROXY_INSTANCE_PORT, verb)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -183,6 +199,8 @@ fn send_to(port: u16, verb: &str) -> std::io::Result<Reply> {
         Ok(Reply::NowPlaying(snapshot.to_owned()))
     } else if let Some(snapshot) = line.strip_prefix(DEVICES_REPLY) {
         Ok(Reply::Devices(snapshot.to_owned()))
+    } else if let Some(build) = line.strip_prefix(BUILD_REPLY) {
+        Ok(Reply::Build(build.to_owned()))
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -205,24 +223,54 @@ pub fn acquire(waker: &crate::backend::Waker, link: Option<&str>) -> Outcome {
         devices: Arc::new(Mutex::new(NO_DEVICES.to_owned())),
     };
 
-    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, INSTANCE_PORT)) {
+    let bind = || TcpListener::bind((Ipv4Addr::LOCALHOST, PROXY_INSTANCE_PORT));
+    let mut listener = bind();
+
+    // Same-build launches surface the existing process. A different build
+    // asks the old downstream process to quit, then takes over the listener.
+    if listener.is_err() {
+        let running_build = match send("build-id") {
+            Ok(Reply::Build(build)) => Some(build),
+            _ => None,
+        };
+        if running_build
+            .as_deref()
+            .is_some_and(|build| build != BUILD_ID)
+        {
+            log::info!(
+                "replacing running Fastpotify Proxy build {} with {}",
+                running_build.as_deref().unwrap_or("unknown"),
+                BUILD_ID
+            );
+            let accepted = |reply: Reply| matches!(reply, Reply::Ok);
+            if send("quit-for-update").is_ok_and(accepted) {
+                for _ in 0..50 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if let Ok(bound) = bind() {
+                        listener = Ok(bound);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let listener = match listener {
         Ok(listener) => listener,
         Err(_) => {
-            // Raise the existing instance only if the port answers as
-            // Fastpotify. A link goes with the request; an instance from
-            // before links does not answer that verb, so a plain show
-            // follows and the link is dropped rather than the launch.
             let accepted = |reply: Reply| matches!(reply, Reply::Ok);
             let opened =
                 link.is_some_and(|uri| send(&format!("open-link {uri}")).is_ok_and(accepted));
             if link.is_some() && !opened {
-                log::warn!("the running Fastpotify does not take links; asking it to show");
+                log::warn!("the running Fastpotify Proxy does not take links; asking it to show");
             }
             let answered = opened || send("show").is_ok_and(accepted);
             if answered {
                 return Outcome::Surfaced;
             }
-            log::warn!("port {INSTANCE_PORT} is busy but not with Fastpotify; running unguarded");
+            log::warn!(
+                "port {PROXY_INSTANCE_PORT} is busy but not with Fastpotify Proxy; running unguarded"
+            );
             return Outcome::Only(unguarded());
         }
     };
@@ -287,6 +335,9 @@ fn serve(
                 // is open.
                 queue(ControlCommand::RefreshDevices);
             }
+            Some(Request::Build) => {
+                let _ = stream.write_all(format!("{BUILD_REPLY}{BUILD_ID}\n").as_bytes());
+            }
             // Not our client; say nothing and hang up.
             None => {}
         }
@@ -300,6 +351,7 @@ enum Request {
     Command(ControlCommand),
     NowPlaying,
     Devices,
+    Build,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -310,6 +362,8 @@ fn parse(line: &str) -> Option<Request> {
         None => (verb, None),
     };
     let command = match (verb, argument) {
+        ("build-id", None) => return Some(Request::Build),
+        ("quit-for-update", None) => ControlCommand::QuitForUpdate,
         ("show", None) => ControlCommand::Show,
         ("playpause", None) => ControlCommand::PlayPause,
         ("play", None) => ControlCommand::Play,

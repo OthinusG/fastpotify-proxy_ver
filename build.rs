@@ -45,7 +45,26 @@ fn glew_library(lib: &std::path::Path) -> Option<&'static str> {
         .find(|name| present.iter().any(|found| found == name))
 }
 
+fn emit_proxy_build_id() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    let build = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "dev".to_owned())
+        });
+    let short = build.get(..8).unwrap_or(&build);
+    println!("cargo:rustc-env=FASTPOTIFY_PROXY_BUILD_SHA={build}");
+    println!("cargo:rustc-env=FASTPOTIFY_PROXY_BUILD_SHORT_SHA={short}");
+}
+
 fn main() {
+    emit_proxy_build_id();
     println!("cargo:rerun-if-changed=build_support/catalogs.rs");
     println!("cargo:rerun-if-changed=assets/i18n");
     let output =

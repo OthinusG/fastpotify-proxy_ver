@@ -2375,6 +2375,7 @@ impl App {
             let playing = self.now_playing().is_some_and(|now| now.playing);
             let action = match command {
                 ControlCommand::Show => Some(Action::ShowWindow),
+                ControlCommand::QuitForUpdate => Some(Action::Quit),
                 ControlCommand::PlayPause => Some(Action::TogglePlay),
                 ControlCommand::Play => (!playing).then_some(Action::TogglePlay),
                 ControlCommand::Pause => playing.then_some(Action::TogglePlay),

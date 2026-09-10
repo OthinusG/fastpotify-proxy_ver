@@ -213,6 +213,10 @@ fn run_control(control: Control) -> i32 {
             }
             0
         }
+        Ok(single_instance::Reply::Build(_)) => {
+            eprintln!("unexpected internal build-id reply");
+            1
+        }
         Err(error) => {
             eprintln!("Fastpotify is not running or does not support remote control: {error}");
             1
