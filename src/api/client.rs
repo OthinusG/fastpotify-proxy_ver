@@ -97,7 +97,9 @@ impl TokenProvider {
 pub struct WebTokens {
     http: reqwest::Client,
     token: tokio::sync::Mutex<crate::auth::StoredToken>,
-    path: std::path::PathBuf,
+    lease: crate::credentials::Lease,
+    remember: std::sync::atomic::AtomicBool,
+    storage_error: std::sync::Arc<dyn Fn(crate::credentials::Error) + Send + Sync>,
     source: ApiSource,
 }
 
@@ -105,21 +107,41 @@ impl WebTokens {
     pub fn new(
         http: reqwest::Client,
         token: crate::auth::StoredToken,
-        path: std::path::PathBuf,
+        lease: crate::credentials::Lease,
         source: ApiSource,
+        storage_error: std::sync::Arc<dyn Fn(crate::credentials::Error) + Send + Sync>,
     ) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
             http,
             token: tokio::sync::Mutex::new(token),
-            path,
+            lease,
+            remember: std::sync::atomic::AtomicBool::new(false),
+            storage_error,
             source,
         })
+    }
+
+    /// Start persistence only after the Web API has verified the account.
+    pub async fn remember(&self) -> std::result::Result<(), crate::credentials::Error> {
+        let token = self.token.lock().await;
+        self.remember
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let pending = self
+            .lease
+            .save(crate::credentials::Grant::Web(token.clone()));
+        drop(token);
+        pending.await
     }
 
     /// A valid access token, refreshing first when it is close to expiry or
     /// `force` asks for a fresh one after a 401.
     async fn access_token(&self, force: bool) -> Result<String> {
         let mut guard = self.token.lock().await;
+        if !self.lease.current() {
+            return Err(ApiError::SignInExpired {
+                api_source: self.source,
+            });
+        }
         if force || guard.needs_refresh() {
             let client_id = guard.client_id.clone();
             let refresh_token = guard.refresh_token.clone();
@@ -130,7 +152,25 @@ impl WebTokens {
                     Some(&refresh_token),
                 ) {
                     Ok(updated) => {
-                        let _ = updated.save(&self.path);
+                        if !self.lease.current() {
+                            return Err(ApiError::SignInExpired {
+                                api_source: self.source,
+                            });
+                        }
+                        if self.remember.load(std::sync::atomic::Ordering::Relaxed) {
+                            let pending = self
+                                .lease
+                                .save(crate::credentials::Grant::Web(updated.clone()));
+                            let notice = self.storage_error.clone();
+                            let lease = self.lease.clone();
+                            tokio::spawn(async move {
+                                if let Err(error) = pending.await
+                                    && lease.current()
+                                {
+                                    notice(error);
+                                }
+                            });
+                        }
                         *guard = updated;
                     }
                     Err(error) => {
@@ -294,6 +334,20 @@ impl ApiClient {
 
     pub fn set_token_provider(&self, provider: Option<TokenProvider>) {
         *self.tokens.lock().unwrap_or_else(|p| p.into_inner()) = provider;
+    }
+
+    /// A new authorization gets its own provider and request cooldown. An old
+    /// request must never pick up a replacement account's credentials.
+    pub fn for_authorization(&self, provider: TokenProvider) -> Self {
+        let client = Self::new(
+            self.http.clone(),
+            self.activity.clone(),
+            self.search_limit,
+            self.artist_albums_limit,
+            self.source,
+        );
+        client.set_token_provider(Some(provider));
+        client
     }
 
     fn provider(&self) -> Result<TokenProvider> {
@@ -1023,6 +1077,50 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn revoked_provider_cannot_return_or_persist_its_token() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-revoked-provider-{}",
+            std::process::id()
+        ));
+        let store = crate::credentials::Store::in_memory(crate::paths::AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        });
+        let slot = crate::credentials::Slot::Shared;
+        let tokens = WebTokens::new(
+            reqwest::Client::new(),
+            crate::auth::StoredToken {
+                client_id: crate::auth::DEFAULT_WEB_CLIENT_ID.into(),
+                access_token: "dummy-access".into(),
+                refresh_token: "dummy-refresh".into(),
+                expires_at: u64::MAX,
+                scope: String::new(),
+            },
+            store.lease(slot),
+            ApiSource::Shared,
+            std::sync::Arc::new(|_| {}),
+        );
+        // Verification can use a token in memory without persisting it yet.
+        assert_eq!(tokens.access_token(false).await.unwrap(), "dummy-access");
+        assert!(store.lease(slot).load().await.unwrap().grant.is_none());
+        tokens.remember().await.unwrap();
+        assert!(store.lease(slot).load().await.unwrap().grant.is_some());
+        store.revoke_all().unwrap();
+        store.lease(slot).delete().await.unwrap();
+        assert!(matches!(
+            tokens.access_token(false).await,
+            Err(ApiError::SignInExpired { .. })
+        ));
+        assert_eq!(
+            tokens.remember().await,
+            Err(crate::credentials::Error::Stale)
+        );
+        assert!(store.lease(slot).load().await.unwrap().grant.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn play_request_body_shapes() {

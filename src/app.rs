@@ -40,10 +40,6 @@ const TOAST_LIFETIME: Duration = Duration::from_millis(3200);
 /// Match other interface animations. egui subtracts the predicted frame time
 /// from delayed repaints, so 33 ms drives roughly one frame per 16 ms.
 const TOAST_FRAME: Duration = Duration::from_millis(33);
-const PERSONAL_APP_NUDGE_AFTER: Duration = Duration::from_secs(5);
-const PERSONAL_APP_NUDGE_INTERVAL: jiff::SignedDuration = jiff::SignedDuration::from_hours(24);
-const PERSONAL_APP_NUDGE: &str =
-    "Spotify is taking a while. Set up a personal app in Settings for a separate API quota";
 const OPTIMISTIC_HOLD: Duration = Duration::from_millis(2500);
 
 /// How long a newly started context remains visible while Spotify catches up.
@@ -94,6 +90,14 @@ enum TrackConfirmation {
     Remote { after_poll: u64, mismatches: u8 },
 }
 
+/// Upcoming context order before shuffle was toggled, used to detect lagging responses.
+#[derive(Clone, Debug)]
+struct QueueShufflePending {
+    current_uri: Option<String>,
+    context_uris: Vec<String>,
+    at: Instant,
+}
+
 /// The playing item as the interface sees it, whichever device plays it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NowPlaying {
@@ -132,6 +136,8 @@ pub enum Target {
 /// How the application is being started.
 #[derive(Clone, Copy, Debug)]
 pub struct AppOptions {
+    /// Demo and isolated tests must not read or migrate real Spotify grants.
+    pub restore_sign_in: bool,
     /// Register the MPRIS media-control service (Linux).
     pub media_controls: bool,
     /// Register the system-tray item (Linux).
@@ -141,6 +147,7 @@ pub struct AppOptions {
 impl Default for AppOptions {
     fn default() -> Self {
         Self {
+            restore_sign_in: true,
             media_controls: true,
             tray: true,
         }
@@ -194,6 +201,10 @@ pub struct App {
     /// Sample data is loaded; Spotify requests are disabled.
     pub offline: bool,
     pub palette: Palette,
+    /// Translation pilot selected by demo mode. Production stays in English.
+    pub locale: crate::i18n::Locale,
+    #[cfg(any(test, feature = "demo"))]
+    pub demo_windows_controls: bool,
     applied_dark: Option<bool>,
 
     pub auth: AuthStatus,
@@ -237,10 +248,14 @@ pub struct App {
     queue_stale_retries: u8,
     /// Rows removed by Clear queue, used to detect stale responses.
     queue_cleared: Option<(std::collections::HashSet<String>, Instant)>,
+    /// Upcoming context order before shuffle was toggled, used to detect lagging responses.
+    queue_shuffle_pending: Option<QueueShufflePending>,
     /// What the window's title bar says, as last set.
     window_title: String,
 
     pub library: Library,
+    liked_songs: crate::liked::LikedSongs,
+    liked_recheck_at: Option<Instant>,
     pub home: HomeData,
     /// Local play history. See [`crate::history`].
     pub plays: crate::history::History,
@@ -263,6 +278,8 @@ pub struct App {
     track_requests: HashSet<String>,
     /// Built table rows, keyed by page. Capped; dropped on reset and eviction.
     pub table_rows: HashMap<Page, TableRowsCache>,
+    page_used: HashMap<Page, Instant>,
+    track_used: HashMap<String, Instant>,
 
     pub history: Vec<Page>,
     pub history_index: usize,
@@ -462,6 +479,7 @@ impl App {
             engine_config,
             settings.web_client_id.clone(),
             waker.clone(),
+            options.restore_sign_in,
         );
         let session = SessionState::load(&dirs.session_file());
         let wake = waker.clone();
@@ -510,6 +528,9 @@ impl App {
             control_devices_stale: true,
             offline: false,
             palette: Palette::dark(),
+            locale: crate::i18n::Locale::English,
+            #[cfg(any(test, feature = "demo"))]
+            demo_windows_controls: false,
             applied_dark: None,
             auth: AuthStatus::Starting,
             user: None,
@@ -546,8 +567,11 @@ impl App {
             queue_recheck_at: None,
             queue_stale_retries: 0,
             queue_cleared: None,
+            queue_shuffle_pending: None,
             window_title: String::new(),
             library: Library::default(),
+            liked_songs: crate::liked::LikedSongs::default(),
+            liked_recheck_at: None,
             home: HomeData::default(),
             plays,
             listening: None,
@@ -568,6 +592,8 @@ impl App {
             track_cache: HashMap::new(),
             track_requests: HashSet::new(),
             table_rows: HashMap::new(),
+            page_used: HashMap::new(),
+            track_used: HashMap::new(),
             history: vec![first_page],
             history_index: 0,
             saved: HashMap::new(),
@@ -1023,19 +1049,15 @@ impl App {
                 .rsplit(':')
                 .next()
                 .and_then(|id| self.track_cache.get(id));
-            let artists = cached
-                .map(|cached| cached.artists.clone())
-                .unwrap_or_else(|| {
-                    track
-                        .artists
-                        .iter()
-                        .map(|name| ArtistRef {
-                            id: None,
-                            name: name.clone(),
-                            uri: None,
-                        })
-                        .collect()
-                });
+            // Playback already carries artist IDs. Keep those links available
+            // while the Web API is loading (or its cached credits have no IDs).
+            let artists = if track.artists.iter().any(|artist| artist.id.is_some()) {
+                track.artists.clone()
+            } else {
+                cached
+                    .map(|cached| cached.artists.clone())
+                    .unwrap_or_else(|| track.artists.clone())
+            };
             let playing = match self.optimistic_playing {
                 Some((playing, at)) if at.elapsed() < PLAYBACK_HOLD => playing,
                 _ => self.local.playback == Playback::Playing,
@@ -1335,6 +1357,13 @@ impl App {
                     self.try_adopt_playlist_cache(&id);
                     self.checkpoint_playlist_cache(&id);
                 }
+                Event::LikedSongsCache {
+                    account_id,
+                    generation,
+                    cache,
+                } => {
+                    self.receive_liked_cache(&account_id, generation, cache);
+                }
                 Event::UserName { id, name } => {
                     self.set_user_name(id, name);
                 }
@@ -1379,6 +1408,9 @@ impl App {
             }
             AuthStatus::WaitingForBrowser { url } => self.sign_in_url = Some(url.clone()),
             AuthStatus::SignedOut => {
+                if matches!(self.dialog, Some(Dialog::PersonalAppIntro)) {
+                    self.dialog = None;
+                }
                 self.sign_in_url = None;
                 self.web_app = None;
                 self.user = None;
@@ -1430,6 +1462,8 @@ impl App {
 
     fn reset_data(&mut self) {
         self.library = Library::default();
+        self.liked_songs = crate::liked::LikedSongs::default();
+        self.liked_recheck_at = None;
         self.home = HomeData::default();
         self.playlist_pages.clear();
         self.album_pages.clear();
@@ -1441,12 +1475,15 @@ impl App {
         self.saved_recordings.clear();
         self.saved_writes.clear();
         self.queue = Loadable::NotLoaded;
+        self.queue_shuffle_pending = None;
         self.devices.clear();
         self.control_devices_stale = true;
         self.devices_fetched_at = None;
         self.search.results = Loadable::NotLoaded;
         self.search.committed.clear();
         self.table_rows.clear();
+        self.page_used.clear();
+        self.track_used.clear();
     }
 
     /// Drop table-row caches whose pages are gone, and cap what remains.
@@ -1610,7 +1647,11 @@ impl App {
         let Some(id) = util::uri_id(&uri).map(str::to_string) else {
             return;
         };
-        if self.track_cache.contains_key(&id) || !self.track_requests.insert(id.clone()) {
+        if self.track_cache.contains_key(&id) {
+            self.track_used.insert(id, Instant::now());
+            return;
+        }
+        if !self.track_requests.insert(id.clone()) {
             return;
         }
         self.backend.api(ApiRequest::Track { id });
@@ -1635,6 +1676,107 @@ impl App {
         if let Some(page) = Page::decode(&Self::context_page(&context)) {
             self.ensure_loaded(page);
         }
+    }
+
+    /// Where the playing songs come from, for the queue's header: the
+    /// playlist, album, artist, or podcast with its page, Liked Songs, or
+    /// a song radio as plain text because a station has no page. A context
+    /// whose name has not loaded is still named by kind so it can open.
+    pub fn playing_from(&self) -> Option<PlayingFrom> {
+        let context = self.playing_context_uri()?;
+        if context.ends_with(":collection") {
+            return Some(PlayingFrom {
+                name: "Liked Songs".into(),
+                page: Some(Page::LikedSongs),
+            });
+        }
+        if context.starts_with("spotify:station:") {
+            return Some(PlayingFrom {
+                name: self
+                    .station_name(&context)
+                    .unwrap_or_else(|| "Radio".into()),
+                page: None,
+            });
+        }
+        let kind = util::uri_kind(&context)?;
+        let id = util::uri_id(&context)?.to_string();
+        let (name, page) = match kind {
+            "playlist" => {
+                let name = self
+                    .library
+                    .playlists
+                    .get()
+                    .and_then(|list| list.iter().find(|playlist| playlist.id == id))
+                    .map(|playlist| playlist.name.clone())
+                    .or_else(|| {
+                        self.playlist_pages
+                            .get(&id)
+                            .and_then(|page| page.playlist.get())
+                            .map(|playlist| playlist.name.clone())
+                    });
+                (
+                    name.unwrap_or_else(|| "Playlist".into()),
+                    Page::Playlist(id),
+                )
+            }
+            "album" => {
+                let name = self
+                    .album_pages
+                    .get(&id)
+                    .and_then(|page| page.album.get())
+                    .map(|album| album.name.clone())
+                    .or_else(|| {
+                        self.now_playing()
+                            .filter(|now| now.album_id.as_deref() == Some(id.as_str()))
+                            .map(|now| now.album_name)
+                    });
+                (name.unwrap_or_else(|| "Album".into()), Page::Album(id))
+            }
+            "artist" => {
+                let name = self
+                    .artist_pages
+                    .get(&id)
+                    .and_then(|page| page.artist.get())
+                    .map(|artist| artist.name.clone())
+                    .or_else(|| {
+                        self.now_playing().and_then(|now| {
+                            now.artists
+                                .into_iter()
+                                .find(|artist| artist.id.as_deref() == Some(id.as_str()))
+                                .map(|artist| artist.name)
+                        })
+                    });
+                (name.unwrap_or_else(|| "Artist".into()), Page::Artist(id))
+            }
+            "show" => {
+                let name = self
+                    .show_pages
+                    .get(&id)
+                    .and_then(|page| page.show.get())
+                    .map(|show| show.name.clone())
+                    .or_else(|| {
+                        self.library
+                            .shows
+                            .items
+                            .iter()
+                            .find(|saved| saved.show.id == id)
+                            .map(|saved| saved.show.name.clone())
+                    });
+                (name.unwrap_or_else(|| "Podcast".into()), Page::Show(id))
+            }
+            _ => return None,
+        };
+        Some(PlayingFrom {
+            name,
+            page: Some(page),
+        })
+    }
+
+    /// "<Song> Radio" for a song station whose song is cached.
+    fn station_name(&self, context: &str) -> Option<String> {
+        let id = context.strip_prefix("spotify:station:track:")?;
+        let track = self.track_cache.get(id)?;
+        Some(format!("{} Radio", track.name))
     }
 
     /// Encodes a context as a value accepted by `Page::decode`.
@@ -1691,6 +1833,7 @@ impl App {
             return;
         };
         if self.track_cache.contains_key(id) {
+            self.track_used.insert(id.to_owned(), Instant::now());
             return;
         }
         let found = if let Some(pid) = context_uri.strip_prefix("spotify:playlist:") {
@@ -1724,6 +1867,7 @@ impl App {
         if let Some(track) = found {
             self.remember_track_recording(&track);
             self.track_cache.insert(id.to_owned(), track);
+            self.track_used.insert(id.to_owned(), Instant::now());
         }
     }
 
@@ -1902,8 +2046,7 @@ impl App {
         }
         self.toasts
             .retain(|toast| toast.created.elapsed() < TOAST_LIFETIME);
-        let spotify_slow = self.backend.activity().busy(PERSONAL_APP_NUDGE_AFTER);
-        self.maybe_suggest_personal_app(spotify_slow, jiff::Timestamp::now());
+        self.maybe_suggest_personal_app();
 
         if self.settings.check_for_updates
             && !self.offline
@@ -1950,6 +2093,17 @@ impl App {
             {
                 self.refresh_queue(false);
             }
+            if let Some(due) = self.liked_recheck_at {
+                if Instant::now() >= due && !self.liked_songs.refreshing() {
+                    self.liked_recheck_at = None;
+                    self.refresh_liked_songs();
+                } else {
+                    ctx.request_repaint_after(
+                        due.saturating_duration_since(Instant::now())
+                            .max(Duration::from_millis(100)),
+                    );
+                }
+            }
             if let Some(due) = self.queue_recheck_at {
                 if Instant::now() >= due {
                     self.queue_recheck_at = None;
@@ -1975,6 +2129,7 @@ impl App {
         if self.last_eviction.elapsed() > Duration::from_secs(20) {
             self.last_eviction = now;
             self.backend.art().evict(ctx);
+            self.evict_stale_pages();
         }
         self.sync_skin(ctx);
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
@@ -2299,25 +2454,61 @@ impl App {
 
     /// The downloaded file for `url`, once the art cache has it.
     ///
-    /// The media controls are handed a file rather than the URL, so the disk
+    /// Windows and macOS are handed a file rather than the URL, so the disk
     /// is asked until the download lands and the answer remembered after
-    /// that; see `media_native::file_url` for why a URL will not do.
-    fn media_art_file(&mut self, url: &str) -> Option<PathBuf> {
+    /// that; see `media_native::file_url` for why a URL will not do. The
+    /// player bar only ever draws the small cover, so on a miss the full-size
+    /// artwork is fetched here -- the one request the controls add.
+    ///
+    /// MPRIS passes `art_url` to the desktop, which fetches whatever it
+    /// wants: Linux needs no file and downloads nothing extra.
+    fn media_art_file(&mut self, ctx: &egui::Context, url: &str) -> Option<PathBuf> {
+        if cfg!(target_os = "linux") {
+            return None;
+        }
         if let Some((known, file)) = &self.media_art
             && known == url
         {
             return Some(file.clone());
         }
-        let file = self.backend.art().cached_file(url)?;
-        self.media_art = Some((url.to_owned(), file.clone()));
-        Some(file)
+        match self.backend.art().cached_file(url) {
+            Some(file) => {
+                self.media_art = Some((url.to_owned(), file.clone()));
+                Some(file)
+            }
+            None => {
+                self.backend.art().prefetch(ctx, url);
+                None
+            }
+        }
     }
 
-    fn sync_media_controls(&mut self) {
+    pub fn thumb_state(&self, dark: bool) -> crate::thumbbar::ThumbState {
+        let now = self.now_playing();
+        crate::thumbbar::ThumbState {
+            has_track: now.is_some(),
+            playing: now.as_ref().is_some_and(|now| now.playing),
+            can_control: now.as_ref().is_some_and(|now| now.can_control),
+            dark,
+        }
+    }
+
+    pub fn windows_controls_visible(&self) -> bool {
+        #[cfg(any(test, feature = "demo"))]
+        {
+            cfg!(windows) || self.demo_windows_controls
+        }
+        #[cfg(not(any(test, feature = "demo")))]
+        {
+            cfg!(windows)
+        }
+    }
+
+    fn sync_media_controls(&mut self, ctx: &egui::Context) {
         let art_file = self
             .now_playing()
             .and_then(|now| now.art_url)
-            .and_then(|url| self.media_art_file(&url));
+            .and_then(|url| self.media_art_file(ctx, &url));
         let state = match self.now_playing() {
             Some(now) => MediaState {
                 playback: if now.playing {
@@ -2460,11 +2651,7 @@ impl App {
             Page::Home => self.load_home(false),
             Page::TopSongs => self.load_top_songs(false),
             Page::Search => {}
-            Page::LikedSongs => {
-                if !self.library.liked.loaded_once {
-                    self.load_more(Page::LikedSongs);
-                }
-            }
+            Page::LikedSongs => self.ensure_liked_songs(),
             Page::Albums => {
                 if !self.library.albums.loaded_once {
                     self.load_more(Page::Albums);
@@ -2691,10 +2878,14 @@ impl App {
     pub fn load_more(&mut self, page: Page) {
         match page {
             Page::LikedSongs => {
-                let list = &mut self.library.liked;
-                if let Some(offset) = list.next_offset.filter(|_| list.can_load_more()) {
-                    list.loading = true;
-                    self.backend.api(ApiRequest::SavedTracks { offset });
+                if !self.liked_songs.cache_checked {
+                    self.ensure_liked_songs();
+                } else if let Some(offset) = self.liked_songs.request_offset() {
+                    self.backend.api(ApiRequest::SavedTracks {
+                        offset,
+                        generation: self.liked_songs.generation,
+                    });
+                    self.library.liked.loading = true;
                 }
             }
             Page::Albums => {
@@ -2823,7 +3014,10 @@ impl App {
         match &page {
             Page::Home => self.load_home(true),
             Page::TopSongs => self.load_top_songs(true),
-            Page::LikedSongs => self.library.liked.reset(),
+            Page::LikedSongs => {
+                self.refresh_liked_songs();
+                return;
+            }
             Page::Albums => self.library.albums.reset(),
             Page::Artists => self.library.artists.reset(),
             Page::Podcasts => self.library.shows.reset(),
@@ -3013,13 +3207,24 @@ impl App {
         if !matches!(self.target(), Target::Local) {
             return;
         }
+        // `queue_one` writes every queued song to both lists, so they hold
+        // the same wishes and adding their counts asks for twice the rows
+        // Next up was given. The extra row taken is the context's own copy
+        // of that song, which stays. Neither list alone is the count
+        // either: a pending add outlives its `manual_queue` entry once the
+        // song starts, and `manual_queue` drops its oldest past a hundred.
+        // Take as many rows as the longer of the two holds.
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for uri in self
-            .manual_queue
-            .iter()
-            .chain(self.pending_queue_adds.iter().map(|(uri, _)| uri))
-        {
+        for uri in &self.manual_queue {
             *counts.entry(uri.clone()).or_insert(0) += 1;
+        }
+        let mut pending: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (uri, _) in &self.pending_queue_adds {
+            *pending.entry(uri.as_str()).or_insert(0) += 1;
+        }
+        for (uri, count) in pending {
+            let held = counts.entry(uri.to_string()).or_insert(0);
+            *held = (*held).max(count);
         }
         if let Loadable::Loaded(queue) = &mut self.queue {
             // Remove one row per queued copy, starting at the front.
@@ -3067,10 +3272,9 @@ impl App {
     /// Name for a playlist created from the queue.
     pub fn queue_playlist_name(&self) -> String {
         if let Some(context) = self.playing_context_uri()
-            && let Some(id) = context.strip_prefix("spotify:station:track:")
-            && let Some(track) = self.track_cache.get(id)
+            && let Some(name) = self.station_name(&context)
         {
-            return format!("{} Radio", track.name);
+            return name;
         }
         let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
         format!("Queue {today}")
@@ -3145,6 +3349,24 @@ impl App {
                 .is_some_and(|item| cleared.contains(item.uri()))
         {
             return true;
+        }
+        // An unchanged context order right after toggling shuffle means the
+        // reordered queue has not landed yet.
+        if let Some(pending) = &self.queue_shuffle_pending
+            && pending.at.elapsed() < PLAYBACK_HOLD
+            && fetched.currently_playing.as_ref().map(|item| item.uri())
+                == pending.current_uri.as_deref()
+        {
+            let at = Self::end_of_queued_rows(&fetched.queue, &self.manual_queue);
+            let fetched_context = &fetched.queue[at..];
+            if fetched_context.len() == pending.context_uris.len()
+                && fetched_context
+                    .iter()
+                    .map(|item| item.uri())
+                    .eq(pending.context_uris.iter().map(String::as_str))
+            {
+                return true;
+            }
         }
         false
     }
@@ -3384,6 +3606,7 @@ impl App {
                 self.queue_stale_retries = 0;
                 if result.is_ok() {
                     self.queue_cleared = None;
+                    self.queue_shuffle_pending = None;
                 }
                 self.queue = Loadable::from_result(result);
                 self.reconcile_pending_queue();
@@ -3747,6 +3970,7 @@ impl App {
                                 playlist_id: playlist.id.clone(),
                                 playlist_name: playlist.name.clone(),
                                 uris: add_uris,
+                                position: None,
                             });
                         }
                         self.open(Page::Playlist(playlist.id));
@@ -3776,10 +4000,11 @@ impl App {
                 playlist_id,
                 playlist_name,
                 items,
+                position,
                 result,
             } => match result {
                 Ok(duplicate_uris) if duplicate_uris.is_empty() => {
-                    self.add_to_playlist_now(playlist_id, playlist_name, items)
+                    self.add_to_playlist_now(playlist_id, playlist_name, items, position)
                 }
                 Ok(duplicate_uris) => {
                     self.playlist_busy = false;
@@ -3787,6 +4012,7 @@ impl App {
                         playlist_id,
                         playlist_name,
                         items,
+                        position,
                         duplicate_uris,
                     });
                 }
@@ -3794,7 +4020,7 @@ impl App {
                     // A failed read must not take away an edit the account is
                     // still allowed to make. The write reports its own error.
                     log::debug!("could not check playlist for duplicates: {error}");
-                    self.add_to_playlist_now(playlist_id, playlist_name, items);
+                    self.add_to_playlist_now(playlist_id, playlist_name, items, position);
                 }
             },
             ApiResponse::PlaylistItemsChanged {
@@ -3803,6 +4029,9 @@ impl App {
                 result,
             } => {
                 self.playlist_busy = false;
+                if let Some(page) = self.playlist_pages.get_mut(&id) {
+                    page.pending_writes = page.pending_writes.saturating_sub(1);
+                }
                 match result {
                     Ok(snapshot) => {
                         if !message.is_empty() {
@@ -3873,22 +4102,43 @@ impl App {
                     self.toast_error(format!("Couldn't update the playlist: {error}"));
                 }
             },
-            ApiResponse::SavedTracks { offset, result } => {
+            ApiResponse::SavedTracks {
+                offset,
+                generation,
+                account_id,
+                result,
+            } => {
+                if generation != self.liked_songs.generation
+                    || self.user_id() != account_id.as_deref()
+                {
+                    return;
+                }
+                let mut more = false;
+                let succeeded = result.is_ok();
                 match result {
                     Ok(page) => {
                         for item in &page.items {
                             let uri = item.track.uri.clone();
                             self.remember_track_recording(&item.track);
-                            if !self.saved_writes.contains_key(&uri) {
+                            if !self.saved_writes.contains_key(&uri)
+                                && self.liked_songs.intent(&uri).is_none()
+                            {
                                 self.set_saved_state(uri, true);
                             }
                         }
-                        self.library.liked.absorb(offset, page);
+                        more = self.liked_songs.absorb(
+                            offset,
+                            page,
+                            jiff::Timestamp::now().as_second(),
+                        );
                     }
-                    Err(error) => self.library.liked.fail(error.to_string()),
+                    Err(error) => self.liked_songs.fail(error.to_string()),
                 }
-                // A sorted table means the whole list, not the loaded part.
-                if self.table_sorts.contains_key(&Page::LikedSongs) {
+                if !more {
+                    self.sync_liked_songs();
+                    self.checkpoint_liked_songs(false);
+                }
+                if succeeded && (more || self.table_sorts.contains_key(&Page::LikedSongs)) {
                     self.load_more(Page::LikedSongs);
                 }
             }
@@ -3966,25 +4216,12 @@ impl App {
                             self.set_saved_state(uri.clone(), saved);
                             match util::uri_kind(uri) {
                                 Some("track") => {
-                                    if self.library.liked.loaded_once {
-                                        if saved {
-                                            let total = self
-                                                .library
-                                                .liked
-                                                .total
-                                                .map(|total| total.saturating_add(1));
-                                            self.library.liked.reset();
-                                            self.library.liked.total = total;
-                                            if matches!(self.page(), Page::LikedSongs) {
-                                                self.load_more(Page::LikedSongs);
-                                            }
-                                        } else {
-                                            self.library
-                                                .liked
-                                                .retain(|item| item.track.uri != *uri);
-                                            if let Some(total) = self.library.liked.total.as_mut() {
-                                                *total = total.saturating_sub(1);
-                                            }
+                                    if self.liked_songs.intent(uri).is_some() {
+                                        self.liked_songs.confirm(uri, saved, true);
+                                    } else if !saved {
+                                        self.library.liked.retain(|item| item.track.uri != *uri);
+                                        if let Some(total) = self.library.liked.total.as_mut() {
+                                            *total = total.saturating_sub(1);
                                         }
                                     }
                                 }
@@ -4013,11 +4250,17 @@ impl App {
                     Err(error) => {
                         for uri in &current_uris {
                             self.set_saved_state(uri.clone(), !saved);
+                            self.liked_songs.confirm(uri, saved, false);
                         }
                         if !current_uris.is_empty() {
                             self.toast_error(format!("Couldn't update your library: {error}"));
                         }
                     }
+                }
+                if self.liked_songs.cache_checked && self.liked_songs.has_confirmed_changes() {
+                    self.sync_liked_songs();
+                    self.checkpoint_liked_songs(true);
+                    self.liked_recheck_at = Some(Instant::now() + Duration::from_secs(5));
                 }
             }
             ApiResponse::Contains { uris, result } => {
@@ -4026,7 +4269,9 @@ impl App {
                 }
                 if let Ok(flags) = result {
                     for (uri, flag) in uris.into_iter().zip(flags) {
-                        if !self.saved_writes.contains_key(&uri) {
+                        if !self.saved_writes.contains_key(&uri)
+                            && self.liked_songs.intent(&uri).is_none()
+                        {
                             self.set_saved_state(uri, flag);
                         }
                     }
@@ -4176,7 +4421,11 @@ impl App {
                     Ok(track) => {
                         self.remember_track_recording(&track);
                         self.request_recording_candidates(&track);
-                        self.track_cache.insert(id, track);
+                        if self.liked_songs.update_track(&track) {
+                            self.sync_liked_songs();
+                        }
+                        self.track_cache.insert(id.clone(), track);
+                        self.track_used.insert(id, Instant::now());
                     }
                     Err(error) => {
                         if self.pending_link.as_deref()
@@ -4204,6 +4453,14 @@ impl App {
                 match result {
                     Ok(()) => {
                         self.remote_recheck_at = Some(Instant::now() + REMOTE_RECHECK);
+                        if action == RemoteAction::Shuffle {
+                            self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
+                            if let Some(pending) = &mut self.queue_shuffle_pending {
+                                pending.at = Instant::now();
+                            } else {
+                                self.note_shuffle_pending();
+                            }
+                        }
                     }
                     Err(error) => {
                         self.optimistic_playing = None;
@@ -4256,6 +4513,7 @@ impl App {
     // ---- navigation ------------------------------------------------------------
 
     pub fn open(&mut self, page: Page) {
+        self.touch_page(&page);
         if *self.page() == page {
             self.ensure_loaded(page.clone());
             self.retain_table_rows(&page);
@@ -4270,6 +4528,7 @@ impl App {
         self.show_devices = false;
         self.ensure_loaded(page.clone());
         self.retain_table_rows(&page);
+        self.evict_stale_pages();
     }
 
     /// Hands the app a Spotify link from outside, a canonical URI as
@@ -4297,7 +4556,7 @@ impl App {
         let id = util::uri_id(&uri).unwrap_or_default().to_string();
         match util::uri_kind(&uri) {
             Some("track") => {
-                if let Some(track) = self.track_cache.get(&id) {
+                if let Some(track) = self.read_cached_track(&id) {
                     self.pending_link = None;
                     let album = track
                         .album
@@ -4331,6 +4590,128 @@ impl App {
 
     pub fn can_go_forward(&self) -> bool {
         self.history_index + 1 < self.history.len()
+    }
+
+    fn touch_page(&mut self, page: &Page) {
+        self.page_used.insert(page.clone(), Instant::now());
+    }
+
+    fn read_cached_track(&mut self, id: &str) -> Option<Track> {
+        let track = self.track_cache.get(id).cloned()?;
+        self.track_used.insert(id.to_owned(), Instant::now());
+        Some(track)
+    }
+
+    /// Drops page caches that exceed the cap, keeping the open page, the
+    /// playing context, and the most recently used pages. History does not
+    /// protect a page from the cap. Track metadata is an LRU of 800.
+    /// Table-row copies of dropped playlist and album pages go with them.
+    fn evict_stale_pages(&mut self) {
+        const MAX_PLAYLIST_PAGES: usize = 12;
+        const MAX_ALBUM_PAGES: usize = 16;
+        const MAX_ARTIST_PAGES: usize = 10;
+        const MAX_SHOW_PAGES: usize = 8;
+        const MAX_TRACK_CACHE: usize = 800;
+
+        let mut protected_playlists = HashSet::new();
+        for (id, page) in &self.playlist_pages {
+            if page.pending_writes > 0 || page.optimistic_snapshot.is_some() {
+                protected_playlists.insert(id.clone());
+            }
+        }
+        let mut protected_albums = HashSet::new();
+        let mut protected_artists = HashSet::new();
+        let mut protected_shows = HashSet::new();
+        match self.page() {
+            Page::Playlist(id) => {
+                protected_playlists.insert(id.clone());
+            }
+            Page::Album(id) => {
+                protected_albums.insert(id.clone());
+            }
+            Page::Artist(id) => {
+                protected_artists.insert(id.clone());
+            }
+            Page::Show(id) => {
+                protected_shows.insert(id.clone());
+            }
+            _ => {}
+        }
+        if let Some(uri) = self.playing_context_uri()
+            && let Some(kind) = util::uri_kind(&uri)
+            && let Some(id) = util::uri_id(&uri)
+        {
+            match kind {
+                "playlist" => {
+                    protected_playlists.insert(id.to_string());
+                }
+                "album" => {
+                    protected_albums.insert(id.to_string());
+                }
+                "artist" => {
+                    protected_artists.insert(id.to_string());
+                }
+                "show" => {
+                    protected_shows.insert(id.to_string());
+                }
+                _ => {}
+            }
+        }
+        evict_lru_map(
+            &mut self.playlist_pages,
+            &self.page_used,
+            |id| Page::Playlist(id.to_string()),
+            &protected_playlists,
+            MAX_PLAYLIST_PAGES,
+        );
+        evict_lru_map(
+            &mut self.album_pages,
+            &self.page_used,
+            |id| Page::Album(id.to_string()),
+            &protected_albums,
+            MAX_ALBUM_PAGES,
+        );
+        evict_lru_map(
+            &mut self.artist_pages,
+            &self.page_used,
+            |id| Page::Artist(id.to_string()),
+            &protected_artists,
+            MAX_ARTIST_PAGES,
+        );
+        evict_lru_map(
+            &mut self.show_pages,
+            &self.page_used,
+            |id| Page::Show(id.to_string()),
+            &protected_shows,
+            MAX_SHOW_PAGES,
+        );
+        self.page_used.retain(|page, _| match page {
+            Page::Playlist(id) => self.playlist_pages.contains_key(id),
+            Page::Album(id) => self.album_pages.contains_key(id),
+            Page::Artist(id) => self.artist_pages.contains_key(id),
+            Page::Show(id) => self.show_pages.contains_key(id),
+            _ => true,
+        });
+        if self.track_cache.len() > MAX_TRACK_CACHE {
+            let playing = self.now_playing().and_then(|now| now.id);
+            let overflow = self.track_cache.len() - MAX_TRACK_CACHE;
+            let mut victims: Vec<(Option<Instant>, String)> = self
+                .track_cache
+                .keys()
+                .filter(|id| playing.as_ref() != Some(*id))
+                .map(|id| {
+                    let used = self.track_used.get(id).copied();
+                    (used, id.clone())
+                })
+                .collect();
+            victims.sort();
+            for (_, id) in victims.into_iter().take(overflow) {
+                self.track_cache.remove(&id);
+                self.track_used.remove(&id);
+            }
+        }
+        let current = self.page().clone();
+        self.retain_table_rows(&current);
     }
 
     // ---- playback --------------------------------------------------------------
@@ -4526,9 +4907,11 @@ impl App {
         // Shuffle applies across contexts until disabled. A selected row still
         // starts first; otherwise choose a random starting track.
         let mut request = request;
+        self.queue_shuffle_pending = None;
         if shuffle_first {
             self.shuffle_wanted = true;
             self.shuffle_set_at = Some(Instant::now());
+            self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
         }
         let shuffle = shuffle_first || self.shuffle_wanted;
         if shuffle
@@ -4934,6 +5317,25 @@ impl App {
         }
     }
 
+    fn note_shuffle_pending(&mut self) {
+        if let Loadable::Loaded(queue) = &self.queue {
+            let at = Self::end_of_queued_rows(&queue.queue, &self.manual_queue);
+            let context_uris: Vec<String> = queue.queue[at..]
+                .iter()
+                .map(|item| item.uri().to_string())
+                .collect();
+            if context_uris.len() > 1 && context_uris.iter().any(|uri| uri != &context_uris[0]) {
+                self.queue_shuffle_pending = Some(QueueShufflePending {
+                    current_uri: self.current_track_uri(),
+                    context_uris,
+                    at: Instant::now(),
+                });
+            } else {
+                self.queue_shuffle_pending = None;
+            }
+        }
+    }
+
     fn set_shuffle(&mut self, shuffle: bool) {
         self.shuffle_wanted = shuffle;
         self.shuffle_set_at = Some(Instant::now());
@@ -4941,6 +5343,8 @@ impl App {
         if let Some(assumed) = &mut self.assumed_context {
             assumed.shuffle = Some(shuffle);
         }
+        self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
+        self.note_shuffle_pending();
         match self.target() {
             Target::Local => {
                 self.local.shuffle = shuffle;
@@ -5062,7 +5466,7 @@ impl App {
         }
         self.session_dirty = true;
         if announce {
-            self.toast(format!("{label} will play next"));
+            self.toast(format!("{label} added to queue"));
         }
         // Queue tracks and episodes directly on the active local engine.
         // Other targets and item types use the Web API.
@@ -5186,6 +5590,7 @@ impl App {
         let Some(page) = self.playlist_pages.get_mut(id) else {
             return;
         };
+        page.pending_writes += 1;
         self.load_generation += 1;
         page.generation = self.load_generation;
         page.items_generation = page.generation;
@@ -5197,11 +5602,44 @@ impl App {
         page.pending_cache = None;
     }
 
+    fn request_playlist_add(
+        &mut self,
+        playlist_id: String,
+        playlist_name: String,
+        items: Vec<PlayableItem>,
+        position: Option<u32>,
+    ) {
+        match self.local_playlist_duplicates(&playlist_id, &items) {
+            Some(duplicate_uris) if duplicate_uris.is_empty() => {
+                self.add_to_playlist_now(playlist_id, playlist_name, items, position);
+            }
+            Some(duplicate_uris) => {
+                self.dialog = Some(Dialog::ConfirmPlaylistDuplicates {
+                    playlist_id,
+                    playlist_name,
+                    items,
+                    position,
+                    duplicate_uris,
+                });
+            }
+            None => {
+                self.playlist_busy = true;
+                self.backend.api(ApiRequest::CheckPlaylistDuplicates {
+                    playlist_id,
+                    playlist_name,
+                    items,
+                    position,
+                });
+            }
+        }
+    }
+
     fn add_to_playlist_now(
         &mut self,
         playlist_id: String,
         playlist_name: String,
         items: Vec<PlayableItem>,
+        position: Option<u32>,
     ) {
         if items.is_empty() {
             return;
@@ -5221,24 +5659,39 @@ impl App {
         });
         let added_at = Some(jiff::Timestamp::now().to_string());
         if let Some(page) = self.playlist_pages.get_mut(&playlist_id) {
-            let tail_loaded = page.items.loaded_once && page.items.next_offset.is_none();
-            let current_total = page
-                .items
-                .total
-                .unwrap_or_else(|| page.items.items.len().try_into().unwrap_or(u32::MAX));
+            let current_total = page.items.total.unwrap_or_else(|| {
+                page.items
+                    .base_offset
+                    .saturating_add(page.items.items.len() as u32)
+            });
+            let at = position.unwrap_or(current_total);
+            let start = page.items.base_offset;
+            let end = start.saturating_add(page.items.items.len() as u32);
             for item in &items {
                 page.local_additions.insert(item.uri().to_string());
             }
-            if tail_loaded {
-                page.items
-                    .items
-                    .extend(items.iter().cloned().map(|item| PlaylistItem {
+            if page.items.loaded_once && (start..=end).contains(&at) {
+                let relative = (at - start) as usize;
+                page.items.items.splice(
+                    relative..relative,
+                    items.iter().cloned().map(|item| PlaylistItem {
                         added_at: added_at.clone(),
                         added_by: added_by.clone(),
                         is_local: false,
                         item: Some(item),
                         track: None,
-                    }));
+                    }),
+                );
+            } else if at < start {
+                // A delayed confirmation can arrive after the user opened a
+                // different slice. Keep that slice attached to the same rows.
+                page.items.base_offset = start.saturating_add(added);
+            }
+            if page.items.loaded_once
+                && at <= end
+                && let Some(next) = &mut page.items.next_offset
+            {
+                *next = next.saturating_add(added);
             }
             page.items.total = Some(current_total.saturating_add(added));
             page.items.revision = page.items.revision.wrapping_add(1);
@@ -5258,6 +5711,7 @@ impl App {
             playlist_id,
             playlist_name,
             uris: items.iter().map(|item| item.uri().to_string()).collect(),
+            position,
         });
     }
 
@@ -5271,6 +5725,10 @@ impl App {
         }
         self.set_saved_state(uri.clone(), saved);
         self.saved_writes.insert(uri.clone(), saved);
+        if self.change_liked_song(&uri, saved) {
+            self.sync_liked_songs();
+            self.ensure_liked_songs();
+        }
         self.backend.api(ApiRequest::SetSaved {
             uris: vec![uri],
             saved,
@@ -5290,7 +5748,7 @@ impl App {
         }
     }
 
-    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::Open(page) => self.open(page),
             Action::OpenUri(uri) => {
@@ -5309,16 +5767,20 @@ impl App {
                 if self.can_go_back() {
                     self.history_index -= 1;
                     let page = self.page().clone();
+                    self.touch_page(&page);
                     self.ensure_loaded(page.clone());
                     self.retain_table_rows(&page);
+                    self.evict_stale_pages();
                 }
             }
             Action::Forward => {
                 if self.can_go_forward() {
                     self.history_index += 1;
                     let page = self.page().clone();
+                    self.touch_page(&page);
                     self.ensure_loaded(page.clone());
                     self.retain_table_rows(&page);
+                    self.evict_stale_pages();
                 }
             }
             Action::PlayContext {
@@ -5389,7 +5851,7 @@ impl App {
                     self.note_recent_context(&context_uri);
                     self.assumed_context = Some(AssumedContext {
                         uri: context_uri,
-                        shuffle: None,
+                        shuffle: self.shuffle_wanted.then_some(true),
                         at: Instant::now(),
                     });
                 }
@@ -5492,14 +5954,20 @@ impl App {
                     self.queue_one(uri, label, false);
                 }
                 self.toast(match count {
-                    1 => "1 song will play next".to_string(),
-                    count => format!("{count} songs will play next"),
+                    1 => "1 song added to queue".to_string(),
+                    count => format!("{count} songs added to queue"),
                 });
             }
             Action::SetSavedMany { uris, saved } => {
+                let mut changed_tracks = false;
                 for uri in &uris {
                     self.set_saved_state(uri.clone(), saved);
                     self.saved_writes.insert(uri.clone(), saved);
+                    changed_tracks |= self.change_liked_song(uri, saved);
+                }
+                if changed_tracks {
+                    self.sync_liked_songs();
+                    self.ensure_liked_songs();
                 }
                 if !uris.is_empty() {
                     self.backend.api(ApiRequest::SetSaved { uris, saved });
@@ -5520,33 +5988,31 @@ impl App {
                 playlist_id,
                 playlist_name,
                 items,
-            } => match self.local_playlist_duplicates(&playlist_id, &items) {
-                Some(duplicate_uris) if duplicate_uris.is_empty() => {
-                    self.add_to_playlist_now(playlist_id, playlist_name, items);
+            } => {
+                self.request_playlist_add(playlist_id, playlist_name, items, None);
+            }
+            Action::InsertInPlaylist {
+                playlist_id,
+                position,
+                item,
+            } => {
+                let name = self
+                    .playlist_pages
+                    .get(&playlist_id)
+                    .and_then(|page| page.playlist.get())
+                    .filter(|playlist| self.can_edit_playlist(playlist))
+                    .map(|playlist| playlist.name.clone());
+                if let Some(name) = name {
+                    self.request_playlist_add(playlist_id, name, vec![*item], Some(position));
                 }
-                Some(duplicate_uris) => {
-                    self.dialog = Some(Dialog::ConfirmPlaylistDuplicates {
-                        playlist_id,
-                        playlist_name,
-                        items,
-                        duplicate_uris,
-                    });
-                }
-                None => {
-                    self.playlist_busy = true;
-                    self.backend.api(ApiRequest::CheckPlaylistDuplicates {
-                        playlist_id,
-                        playlist_name,
-                        items,
-                    });
-                }
-            },
+            }
             Action::ConfirmAddToPlaylist {
                 playlist_id,
                 playlist_name,
                 items,
+                position,
             } => {
-                self.add_to_playlist_now(playlist_id, playlist_name, items);
+                self.add_to_playlist_now(playlist_id, playlist_name, items, position);
             }
             Action::RemoveFromPlaylist { playlist_id, uris } => {
                 let snapshot_id = self
@@ -5597,7 +6063,13 @@ impl App {
                 });
             }
             Action::ShowDialog(dialog) => self.dialog = Some(dialog),
-            Action::CloseDialog => self.dialog = None,
+            Action::CloseDialog => {
+                if matches!(self.dialog, Some(Dialog::PersonalAppIntro)) {
+                    self.settings.personal_app_intro_seen = true;
+                    self.settings_dirty = true;
+                }
+                self.dialog = None;
+            }
             Action::CreatePlaylist {
                 name,
                 public,
@@ -5730,6 +6202,18 @@ impl App {
                     self.settings.web_client_id.clone(),
                 ));
             }
+            Action::OpenPersonalAppSetup => {
+                self.settings.personal_app_intro_seen = true;
+                self.settings_dirty = true;
+                self.dialog = None;
+                self.open(Page::Settings);
+                ctx.data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new(crate::ui::settings::PERSONAL_APP_FOCUS_ID),
+                        true,
+                    );
+                });
+            }
             Action::SignOut => {
                 self.backend.send(Command::SignOut);
                 self.history = vec![Page::Home];
@@ -5764,6 +6248,38 @@ impl App {
                 }
             }
             Action::CheckForUpdates => self.check_for_updates(true),
+            Action::SetLibrarySort { shelf, sort } => {
+                if sort.supports(shelf) {
+                    self.settings.library_sort.insert(shelf, sort);
+                    match shelf {
+                        crate::settings::LibraryShelf::Albums => self.library.albums.error = None,
+                        crate::settings::LibraryShelf::Artists => self.library.artists.error = None,
+                        crate::settings::LibraryShelf::Podcasts => self.library.shows.error = None,
+                        crate::settings::LibraryShelf::Playlists => {}
+                    }
+                    self.mark_settings_dirty();
+                }
+            }
+            Action::ArrangeLibrary {
+                pinned,
+                playlist_order,
+            } => {
+                self.settings.liked_songs_pinned = pinned
+                    .iter()
+                    .any(|key| key == crate::settings::LIKED_SONGS_KEY);
+                self.settings.pinned_contexts = pinned;
+                if let Some(order) = playlist_order {
+                    self.settings.sidebar_order = order;
+                    self.settings.library_sort.insert(
+                        crate::settings::LibraryShelf::Playlists,
+                        crate::settings::LibrarySort::Local,
+                    );
+                }
+                self.settings
+                    .sidebar_order
+                    .retain(|key| !self.settings.pinned_contexts.contains(key));
+                self.mark_settings_dirty();
+            }
             Action::SettingsChanged => {
                 self.settings_dirty = true;
                 ctx.set_theme(match self.settings.theme {
@@ -5883,6 +6399,20 @@ impl App {
                 // The window level is set at creation, so push the new level to
                 // the live window.
                 self.push_winamp_level(ctx);
+            }
+            Action::SetWinampTaskbar(visible) => {
+                if self.settings.winamp_show_taskbar != visible {
+                    self.settings.winamp_show_taskbar = visible;
+                    self.mark_settings_dirty();
+                    if self.settings.winamp_window {
+                        // This window attribute is fixed at creation. Keep
+                        // the visible mini player, its position, and playback
+                        // while replacing only its native window.
+                        self.winamp.remember_position();
+                        self.switch_intent = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
             }
             Action::ToggleWinampPlaylist => {
                 self.settings.playlist_open = !self.settings.playlist_open;
@@ -6048,18 +6578,25 @@ impl App {
         self.backend.send(Command::CheckForUpdates { manual });
     }
 
-    fn maybe_suggest_personal_app(&mut self, spotify_slow: bool, now: jiff::Timestamp) {
-        if !spotify_slow
-            || self.settings.web_client_id.is_some()
+    fn maybe_suggest_personal_app(&mut self) {
+        if self.settings.personal_app_intro_seen
+            || self
+                .settings
+                .web_client_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+            || self.web_app.is_some()
             || !self.is_connected()
             || self.offline
-            || !personal_app_nudge_due(self.settings.personal_app_nudge_at.as_deref(), now)
+            || self.user.as_ref().and_then(|user| user.product.as_deref()) != Some("premium")
+            || self.dialog.is_some()
+            || self.show_devices
+            || self.settings.winamp_window
+            || self.page() == &Page::Settings
         {
             return;
         }
-        self.settings.personal_app_nudge_at = Some(now.to_string());
-        self.settings_dirty = true;
-        self.toast(PERSONAL_APP_NUDGE);
+        self.dialog = Some(Dialog::PersonalAppIntro);
     }
 
     /// Selected row indices for `page`.
@@ -6175,7 +6712,7 @@ impl App {
         #[cfg(feature = "milkdrop")]
         self.sync_milkdrop(ctx);
         self.apply_actions(ctx);
-        self.sync_media_controls();
+        self.sync_media_controls(ctx);
         self.sync_window_title(ctx);
     }
 
@@ -6264,7 +6801,7 @@ impl App {
         }
         self.apply_actions(ctx);
         self.refresh_frame_now();
-        self.sync_media_controls();
+        self.sync_media_controls(ctx);
 
         if !self.settings.winamp_window && !self.switch_intent {
             if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
@@ -6490,6 +7027,151 @@ impl App {
     }
 }
 
+impl App {
+    fn ensure_liked_songs(&mut self) {
+        if self.liked_songs.cache_loading || self.liked_songs.refreshing() {
+            return;
+        }
+        if !self.liked_songs.cache_checked {
+            if self.user_id().is_none() {
+                return;
+            }
+            self.load_generation = self.load_generation.wrapping_add(1);
+            self.liked_songs.generation = self.load_generation;
+            self.liked_songs.cache_loading = true;
+            self.library.liked.loading = true;
+            self.backend.send(Command::LoadLikedSongsCache {
+                generation: self.load_generation,
+            });
+        } else if !self.liked_songs.fresh(jiff::Timestamp::now().as_second())
+            && self.library.liked.error.is_none()
+        {
+            self.refresh_liked_songs();
+        }
+    }
+
+    fn receive_liked_cache(
+        &mut self,
+        account: &str,
+        generation: u64,
+        cache: Option<crate::liked::Cache>,
+    ) {
+        if self.user_id() != Some(account)
+            || self.liked_songs.generation != generation
+            || self.liked_songs.cache_checked
+        {
+            return;
+        }
+        self.liked_songs.cache_loading = false;
+        self.liked_songs.cache_checked = true;
+        if let Some(cache) = cache.filter(|cache| cache.valid_for(account)) {
+            self.liked_songs.restore(cache);
+        }
+        self.sync_liked_songs();
+        for item in &self.library.liked.items {
+            let uri = &item.track.uri;
+            if !self.saved_writes.contains_key(uri) && self.liked_songs.intent(uri).is_none() {
+                self.saved.insert(uri.clone(), true);
+                if let Some(key) = item.track.recording_key() {
+                    self.track_recordings.insert(uri.clone(), key.clone());
+                    self.saved_recordings.insert(key);
+                }
+            }
+        }
+        if !self.liked_songs.fresh(jiff::Timestamp::now().as_second())
+            || self.liked_songs.has_confirmed_changes()
+        {
+            self.refresh_liked_songs();
+        } else if self.table_sorts.contains_key(&Page::LikedSongs) {
+            self.load_more(Page::LikedSongs);
+        }
+    }
+
+    fn refresh_liked_songs(&mut self) {
+        if !self.liked_songs.cache_checked {
+            self.ensure_liked_songs();
+            return;
+        }
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.liked_songs.start_refresh(self.load_generation);
+        self.library.liked.loading = true;
+        self.load_more(Page::LikedSongs);
+    }
+
+    fn sync_liked_songs(&mut self) {
+        self.liked_songs.sync_view(&mut self.library.liked);
+        for (uri, saved) in self.liked_songs.intents() {
+            self.set_saved_state(uri, saved);
+        }
+    }
+
+    fn checkpoint_liked_songs(&mut self, force: bool) {
+        if let Some(account) = self.user_id().map(str::to_owned)
+            && let Some(cache) = self.liked_songs.checkpoint(account, force)
+        {
+            self.backend.send(Command::StoreLikedSongsCache(cache));
+        }
+    }
+
+    fn change_liked_song(&mut self, uri: &str, saved: bool) -> bool {
+        let Some(id) = uri.strip_prefix("spotify:track:") else {
+            return false;
+        };
+        self.liked_songs.seed(&self.library.liked);
+        let track = self
+            .track_cache
+            .get(id)
+            .cloned()
+            .or_else(|| {
+                self.library
+                    .liked
+                    .items
+                    .iter()
+                    .find(|item| item.track.uri == uri)
+                    .map(|item| item.track.clone())
+            })
+            .or_else(|| {
+                self.now_playing_item().and_then(|item| match item {
+                    PlayableItem::Track(track) if track.uri == uri => Some(track),
+                    _ => None,
+                })
+            })
+            .or_else(|| {
+                self.table_rows.values().find_map(|table| {
+                    table.items.iter().find_map(|(item, _, _)| match item {
+                        PlayableItem::Track(track) if track.uri == uri => Some(track.clone()),
+                        _ => None,
+                    })
+                })
+            })
+            .or_else(|| {
+                self.home
+                    .top_tracks
+                    .get()
+                    .and_then(|tracks| tracks.iter().find(|track| track.uri == uri).cloned())
+            })
+            .or_else(|| {
+                self.search
+                    .results
+                    .get()
+                    .and_then(|results| results.tracks.as_ref())
+                    .and_then(|tracks| tracks.items.iter().find(|track| track.uri == uri).cloned())
+            });
+        let missing = track.is_none();
+        let track = track.unwrap_or_else(|| Track {
+            uri: uri.to_string(),
+            id: Some(id.to_string()),
+            name: "Loading…".into(),
+            ..Default::default()
+        });
+        self.liked_songs.change(uri.to_string(), saved, track);
+        if saved && missing && self.track_requests.insert(id.to_string()) {
+            self.backend.api(ApiRequest::Track { id: id.to_string() });
+        }
+        true
+    }
+}
+
 fn same_recording_hint(left: &Track, right: &Track) -> bool {
     left.uri != right.uri
         && !left.name.is_empty()
@@ -6518,14 +7200,6 @@ fn increase_playlist_total(playlist: &mut Playlist, added: u32) {
     }
 }
 
-fn personal_app_nudge_due(last: Option<&str>, now: jiff::Timestamp) -> bool {
-    let Some(last) = last.and_then(|value| value.parse::<jiff::Timestamp>().ok()) else {
-        return true;
-    };
-    let elapsed = now.duration_since(last);
-    elapsed < jiff::SignedDuration::ZERO || elapsed >= PERSONAL_APP_NUDGE_INTERVAL
-}
-
 pub fn engine_config(
     dirs: &AppDirs,
     settings: &Settings,
@@ -6548,7 +7222,6 @@ pub fn engine_config(
             .clone()
             .filter(|device| !device.trim().is_empty()),
         initial_volume: settings.volume,
-        credentials_dir: dirs.credentials_dir(),
         volume_dir: dirs.volume_dir(),
         audio_cache_dir: settings.audio_cache.then(|| dirs.audio_cache_dir()),
         audio_cache_limit: Some(settings.audio_cache_mb.max(64) * 1024 * 1024),
@@ -6702,6 +7375,31 @@ fn cap_uris(uris: &[String], index: u32) -> (Vec<String>, u32) {
     let start = (index as usize).min(uris.len().saturating_sub(1));
     let end = (start + MAX).min(uris.len());
     (uris[start..end].to_vec(), 0)
+}
+
+fn evict_lru_map<V>(
+    map: &mut HashMap<String, V>,
+    used: &HashMap<Page, Instant>,
+    to_page: impl Fn(&str) -> Page,
+    protected: &HashSet<String>,
+    max: usize,
+) {
+    if map.len() <= max {
+        return;
+    }
+    let overflow = map.len() - max;
+    let mut victims: Vec<(Option<Instant>, String)> = map
+        .keys()
+        .filter(|id| !protected.contains(*id))
+        .map(|id| {
+            let used = used.get(&to_page(id)).copied();
+            (used, id.clone())
+        })
+        .collect();
+    victims.sort();
+    for (_, id) in victims.into_iter().take(overflow) {
+        map.remove(&id);
+    }
 }
 
 #[cfg(test)]
@@ -7593,7 +8291,60 @@ mod tests {
         );
     }
 
-    /// Play next inserts after manual queue rows and before context rows.
+    /// Rule: clearing takes back the rows Add to queue added, and the
+    /// context's own copy of the same song is not one of them, however
+    /// recently the song was queued.
+    #[test]
+    fn clearing_a_just_queued_song_leaves_the_contexts_copy_of_it() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:a".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        // What is playing comes to b on its own later on.
+        app.queue = loaded_queue(
+            "spotify:track:a",
+            &[
+                "spotify:track:ctx1",
+                "spotify:track:b",
+                "spotify:track:ctx2",
+            ],
+        );
+        app.apply(
+            Action::AddToQueue {
+                uri: "spotify:track:b".into(),
+                label: "b".into(),
+            },
+            &ctx,
+        );
+        let (_, next) = queue_uris(&app);
+        assert_eq!(
+            next,
+            vec![
+                "spotify:track:b",
+                "spotify:track:ctx1",
+                "spotify:track:b",
+                "spotify:track:ctx2",
+            ],
+            "one row queued on top, the context's own b still below"
+        );
+        assert!(app.can_clear_queue());
+        app.apply(Action::ClearQueue, &ctx);
+        let (_, next) = queue_uris(&app);
+        assert_eq!(
+            next,
+            vec![
+                "spotify:track:ctx1",
+                "spotify:track:b",
+                "spotify:track:ctx2",
+            ],
+            "the queued b goes and the context keeps the b it was going to play"
+        );
+    }
+
+    /// Add to queue inserts after manual queue rows and before context rows.
     #[test]
     fn play_next_queues_after_the_songs_already_queued() {
         let ctx = egui::Context::default();
@@ -7631,6 +8382,10 @@ mod tests {
                 "spotify:track:ctx2",
             ],
             "queued songs keep their order and stay ahead of the context"
+        );
+        assert_eq!(
+            app.toasts.last().map(|toast| toast.message.as_str()),
+            Some("c added to queue")
         );
     }
 
@@ -7760,6 +8515,420 @@ mod tests {
         assert_eq!(app.queued_rows_len(), 0);
     }
 
+    /// Changing shuffle rechecks the queue to reflect the new playback order.
+    #[test]
+    fn changing_shuffle_schedules_a_queue_recheck() {
+        let mut app = headless_app();
+        app.queue = loaded_queue("spotify:track:a", &["spotify:track:b"]);
+        assert!(app.queue_recheck_at.is_none());
+        app.set_shuffle(true);
+        assert!(
+            app.queue_recheck_at.is_some(),
+            "toggling shuffle asks Spotify for the reordered queue"
+        );
+    }
+
+    /// Toggling shuffle for local playback rechecks the queue, reveals the
+    /// new playback order without losing hand-queued songs, and ignores an
+    /// old response from before the toggle.
+    #[test]
+    fn shuffling_local_playback_updates_queue_and_keeps_user_songs() {
+        let mut app = headless_app();
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:playing".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.manual_queue = vec!["spotify:track:manual1".into()];
+        app.queue = loaded_queue(
+            "spotify:track:playing",
+            &[
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+                "spotify:track:ctx3",
+            ],
+        );
+        assert_eq!(app.queued_rows_len(), 1);
+
+        // Toggle shuffle on local player.
+        app.set_shuffle(true);
+        assert!(
+            app.queue_recheck_at.is_some(),
+            "toggling shuffle schedules a queue recheck"
+        );
+
+        // Start the queue refresh with a new sequence number.
+        app.refresh_queue(true);
+        let seq = app.queue_seq;
+
+        // A response from before the shuffle command is dropped unread.
+        let old_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+                queued_song("spotify:track:ctx3"),
+            ],
+        };
+        app.handle_api(ApiResponse::Queue {
+            seq: seq - 1,
+            result: Ok(old_response),
+        });
+        let (_, next) = queue_uris(&app);
+        assert_eq!(
+            next,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+                "spotify:track:ctx3",
+            ],
+            "the superseded pre-shuffle response is dropped unread"
+        );
+
+        // When the fresh response arrives, the context rows reflect the new shuffle
+        // order while manually queued rows stay on top.
+        let shuffled_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx3"),
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+            ],
+        };
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(shuffled_response),
+        });
+
+        let (current, next) = queue_uris(&app);
+        assert_eq!(current.as_deref(), Some("spotify:track:playing"));
+        assert_eq!(
+            next,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx3",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+            ],
+            "the user's song stays on top and the shuffled context order is shown"
+        );
+        assert_eq!(
+            app.queued_rows_len(),
+            1,
+            "the user's queued section is preserved"
+        );
+    }
+
+    /// Toggling shuffle for remote playback rechecks the queue on confirmation,
+    /// adopts the new shuffle order while keeping hand-queued songs, and drops
+    /// an overtaken response.
+    #[test]
+    fn shuffling_remote_playback_updates_queue_and_keeps_user_songs() {
+        let mut app = headless_app();
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.local_ready = false;
+        app.selected_device = Some("speaker".into());
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState {
+                device: Some(crate::api::models::Device {
+                    id: Some("speaker".into()),
+                    name: "Speaker".into(),
+                    is_active: true,
+                    ..Default::default()
+                }),
+                item: Some(crate::api::models::PlayableItem::Track(
+                    crate::api::models::Track {
+                        uri: "spotify:track:playing".into(),
+                        ..Default::default()
+                    },
+                )),
+                is_playing: true,
+                shuffle_state: false,
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        });
+        app.manual_queue = vec!["spotify:track:manual1".into()];
+        app.queue = loaded_queue(
+            "spotify:track:playing",
+            &[
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+            ],
+        );
+        assert_eq!(app.queued_rows_len(), 1);
+
+        // Turn on shuffle on the remote target.
+        app.set_shuffle(true);
+        assert!(app.queue_recheck_at.is_some());
+
+        // Spotify confirms the remote shuffle action.
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Shuffle,
+            result: Ok(()),
+        });
+        assert!(
+            app.queue_recheck_at.is_some(),
+            "confirmed remote shuffle rechecks the queue"
+        );
+
+        // Fetch the queue with a new sequence number.
+        app.refresh_queue(true);
+        let seq = app.queue_seq;
+
+        // An older response is ignored.
+        let stale = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+            ],
+        };
+        app.handle_api(ApiResponse::Queue {
+            seq: seq - 1,
+            result: Ok(stale),
+        });
+        assert_eq!(
+            queue_uris(&app).1,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+            ]
+        );
+
+        // The confirming response shows the new shuffle order.
+        let shuffled = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx2"),
+                queued_song("spotify:track:ctx1"),
+            ],
+        };
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(shuffled),
+        });
+
+        let (current, next) = queue_uris(&app);
+        assert_eq!(current.as_deref(), Some("spotify:track:playing"));
+        assert_eq!(
+            next,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx2",
+                "spotify:track:ctx1",
+            ],
+            "remote shuffle preserves hand-queued songs and updates context rows"
+        );
+        assert_eq!(app.queued_rows_len(), 1);
+    }
+
+    /// A stale queue answer whose current track does not match the active
+    /// local player is rejected rather than accepted after a shuffle toggle.
+    #[test]
+    fn stale_queue_after_shuffle_is_retried_and_not_accepted() {
+        let mut app = headless_app();
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:playing".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.queue = loaded_queue(
+            "spotify:track:playing",
+            &["spotify:track:ctx1", "spotify:track:ctx2"],
+        );
+
+        app.set_shuffle(true);
+        app.refresh_queue(true);
+        let seq = app.queue_seq;
+
+        // A stale response that reports an old playing track is rejected.
+        let stale_track_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:old_song")),
+            queue: vec![
+                queued_song("spotify:track:ctx2"),
+                queued_song("spotify:track:ctx1"),
+            ],
+        };
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(stale_track_response),
+        });
+
+        assert_eq!(
+            queue_uris(&app).1,
+            vec!["spotify:track:ctx1", "spotify:track:ctx2"],
+            "the queue remains uncorrupted by the stale response"
+        );
+        assert_eq!(app.queue_stale_retries, 1);
+        assert!(app.queue_recheck_at.is_some());
+    }
+
+    /// A lagging queue answer after a shuffle toggle with the same current song
+    /// and sequence is rejected and retried until the new order arrives.
+    #[test]
+    fn lagging_queue_after_shuffle_is_retried_until_new_order_arrives() {
+        let mut app = headless_app();
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:playing".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.manual_queue = vec!["spotify:track:manual1".into()];
+        app.queue = loaded_queue(
+            "spotify:track:playing",
+            &[
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+                "spotify:track:ctx3",
+            ],
+        );
+
+        app.set_shuffle(true);
+        app.refresh_queue(true);
+        let seq = app.queue_seq;
+
+        // A lagging response arrives with the same currently playing track and
+        // the current sequence, but the context rows are still in the old order.
+        let lagging_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+                queued_song("spotify:track:ctx3"),
+            ],
+        };
+
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(lagging_response.clone()),
+        });
+
+        // The stale pre-shuffle order is rejected, preserving the existing queue,
+        // incrementing the retry counter, and scheduling a prompt recheck.
+        assert_eq!(app.queue_stale_retries, 1);
+        assert!(app.queue_recheck_at.is_some());
+        assert_eq!(
+            queue_uris(&app).1,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+                "spotify:track:ctx3",
+            ]
+        );
+
+        // A second lagging response also retries.
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(lagging_response),
+        });
+        assert_eq!(app.queue_stale_retries, 2);
+        assert!(app.queue_recheck_at.is_some());
+
+        // Once the reordered response arrives, it is accepted and pending state clears.
+        let new_order_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:manual1"),
+                queued_song("spotify:track:ctx3"),
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+            ],
+        };
+
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(new_order_response),
+        });
+
+        assert_eq!(app.queue_stale_retries, 0);
+        assert!(app.queue_shuffle_pending.is_none());
+        assert_eq!(
+            queue_uris(&app).1,
+            vec![
+                "spotify:track:manual1",
+                "spotify:track:ctx3",
+                "spotify:track:ctx1",
+                "spotify:track:ctx2",
+            ]
+        );
+    }
+
+    /// If Spotify returns an unchanged queue order after shuffle, Fastpotify
+    /// retries up to the limit and then accepts the result as a bounded fallback.
+    #[test]
+    fn unchanged_shuffle_result_has_bounded_fallback() {
+        let mut app = headless_app();
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:playing".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        app.queue = loaded_queue(
+            "spotify:track:playing",
+            &["spotify:track:ctx1", "spotify:track:ctx2"],
+        );
+
+        app.set_shuffle(true);
+        app.refresh_queue(true);
+        let seq = app.queue_seq;
+
+        let unchanged_response = Queue {
+            currently_playing: Some(queued_song("spotify:track:playing")),
+            queue: vec![
+                queued_song("spotify:track:ctx1"),
+                queued_song("spotify:track:ctx2"),
+            ],
+        };
+
+        // Responses with the pre-shuffle order are rejected as stale and scheduled for retry.
+        for expected_retries in 1..=QUEUE_STALE_RETRIES {
+            app.handle_api(ApiResponse::Queue {
+                seq,
+                result: Ok(unchanged_response.clone()),
+            });
+            assert_eq!(app.queue_stale_retries, expected_retries);
+            assert!(app.queue_recheck_at.is_some());
+        }
+
+        // The next response exceeds the retry limit, so Fastpotify accepts it.
+        app.handle_api(ApiResponse::Queue {
+            seq,
+            result: Ok(unchanged_response),
+        });
+        assert_eq!(app.queue_stale_retries, 0);
+        assert!(app.queue_shuffle_pending.is_none());
+        assert_eq!(
+            queue_uris(&app).1,
+            vec!["spotify:track:ctx1", "spotify:track:ctx2"]
+        );
+    }
+
     fn picked(app: &App, page: &Page) -> Vec<usize> {
         app.picked_rows(page)
             .map(|rows| rows.iter().copied().collect())
@@ -7859,58 +9028,109 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         )
     }
 
     #[test]
-    fn slow_spotify_suggests_a_personal_app_once_a_day() {
-        let mut app = test_app("personal-app-nudge");
+    fn premium_listeners_discover_personal_apps_before_requests_slow_down() {
+        let mut app = test_app("personal-app-intro");
         app.auth = AuthStatus::Connected {
             username: "listener".into(),
         };
-        let now: jiff::Timestamp = "2026-09-03T15:00:00Z".parse().unwrap();
-
-        app.maybe_suggest_personal_app(false, now);
-        assert!(app.toasts.is_empty(), "fast requests need no reminder");
-
-        app.maybe_suggest_personal_app(true, now);
-        assert_eq!(app.toasts.len(), 1);
-        assert_eq!(app.toasts[0].message, PERSONAL_APP_NUDGE);
-        assert_eq!(
-            app.settings.personal_app_nudge_at.as_deref(),
-            Some("2026-09-03T15:00:00Z")
-        );
-        assert!(app.settings_dirty, "the reminder time must be persisted");
-
-        app.maybe_suggest_personal_app(true, now + jiff::SignedDuration::from_hours(23));
-        assert_eq!(app.toasts.len(), 1, "the reminder must stay quiet today");
-
-        app.maybe_suggest_personal_app(true, now + PERSONAL_APP_NUDGE_INTERVAL);
-        assert_eq!(app.toasts.len(), 2, "the reminder returns after a day");
+        app.user = Some(User {
+            product: Some("premium".into()),
+            ..User::default()
+        });
+        // Having seen an old transient toast does not count as seeing the intro.
+        app.settings.personal_app_nudge_at = Some("2026-09-09T10:00:00Z".into());
+        app.maybe_suggest_personal_app();
+        assert!(matches!(app.dialog, Some(Dialog::PersonalAppIntro)));
+        assert!(!app.settings.personal_app_intro_seen);
+        app.actions.push(Action::CloseDialog);
+        app.apply_actions(&egui::Context::default());
+        assert!(app.settings.personal_app_intro_seen);
+        assert!(app.dialog.is_none());
+        let saved = serde_json::to_string(&app.settings).unwrap();
+        let mut restarted = test_app("personal-app-intro-restart");
+        restarted.settings = serde_json::from_str(&saved).unwrap();
+        restarted.auth = app.auth.clone();
+        restarted.user = app.user.clone();
+        restarted.maybe_suggest_personal_app();
+        assert!(restarted.dialog.is_none(), "dismissal survives a restart");
+        assert!(app.toasts.is_empty(), "the old daily reminder is replaced");
     }
 
     #[test]
-    fn configured_personal_app_suppresses_the_slow_spotify_reminder() {
-        let mut app = test_app("personal-app-nudge-configured");
+    fn personal_app_intro_waits_for_a_premium_account_using_shared_access() {
+        let mut app = test_app("personal-app-intro-eligibility");
         app.auth = AuthStatus::Connected {
             username: "listener".into(),
         };
+        for product in [None, Some("free"), Some("open")] {
+            app.user = Some(User {
+                product: product.map(str::to_string),
+                ..User::default()
+            });
+            app.maybe_suggest_personal_app();
+            assert!(app.dialog.is_none());
+        }
+        app.user = Some(User {
+            product: Some("premium".into()),
+            ..User::default()
+        });
         app.settings.web_client_id = Some("personal-client".into());
-
-        app.maybe_suggest_personal_app(true, jiff::Timestamp::now());
-
-        assert!(app.toasts.is_empty());
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.settings.web_client_id = None;
+        app.web_app = Some("personal-client".into());
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.web_app = None;
+        app.auth = AuthStatus::SignedOut;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.auth = AuthStatus::Connected {
+            username: "listener".into(),
+        };
+        app.offline = true;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
     }
 
     #[test]
-    fn missing_invalid_and_future_nudge_times_do_not_hide_the_reminder() {
-        let now: jiff::Timestamp = "2026-09-03T15:00:00Z".parse().unwrap();
-
-        assert!(personal_app_nudge_due(None, now));
-        assert!(personal_app_nudge_due(Some("not a timestamp"), now));
-        assert!(personal_app_nudge_due(Some("2026-09-04T15:00:00Z"), now));
+    fn personal_app_intro_defers_while_another_surface_is_in_use() {
+        let mut app = test_app("personal-app-intro-defer");
+        app.auth = AuthStatus::Connected {
+            username: "listener".into(),
+        };
+        app.user = Some(User {
+            product: Some("premium".into()),
+            ..User::default()
+        });
+        app.dialog = Some(Dialog::Shortcuts);
+        app.maybe_suggest_personal_app();
+        assert!(matches!(app.dialog, Some(Dialog::Shortcuts)));
+        app.dialog = None;
+        app.show_devices = true;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.show_devices = false;
+        app.settings.winamp_window = true;
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.settings.winamp_window = false;
+        app.open(Page::Settings);
+        app.maybe_suggest_personal_app();
+        assert!(app.dialog.is_none());
+        app.open(Page::Home);
+        app.maybe_suggest_personal_app();
+        assert!(matches!(app.dialog, Some(Dialog::PersonalAppIntro)));
+        app.handle_auth(AuthStatus::SignedOut);
+        assert!(app.dialog.is_none());
+        assert!(!app.settings.personal_app_intro_seen);
     }
 
     fn play(uri: &str, at: &str) -> crate::api::models::PlayHistory {
@@ -8045,6 +9265,7 @@ mod tests {
         };
         let options = AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
         let mut app = App::new(
@@ -8064,6 +9285,7 @@ mod tests {
 
         let options = AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
         let app = App::new(&Waker::default(), dirs, Settings::default(), options);
@@ -8128,6 +9350,78 @@ mod tests {
         assert_eq!(app.queue_playlist_name(), "Wish You Were Here Radio");
         app.assumed_context = None;
         assert!(app.queue_playlist_name().starts_with("Queue "));
+    }
+
+    /// The queue names where the playing song comes from and opens it.
+    /// A radio has no page; a context whose name has not loaded is still
+    /// named by kind so it can open.
+    #[test]
+    fn playing_from_names_the_context_and_its_page() {
+        let mut app = headless_app();
+        assert_eq!(app.playing_from(), None, "no context, no line");
+        let assume = |app: &mut App, uri: &str| {
+            app.assumed_context = Some(AssumedContext {
+                uri: uri.into(),
+                shuffle: None,
+                at: Instant::now(),
+            });
+        };
+        let named = |app: &App| {
+            let from = app.playing_from().expect("a context is playing");
+            (from.name, from.page)
+        };
+
+        app.library.playlists = Loadable::Loaded(vec![crate::api::models::Playlist {
+            id: "pl9".into(),
+            uri: "spotify:playlist:pl9".into(),
+            name: "Long Way Home".into(),
+            ..Default::default()
+        }]);
+        assume(&mut app, "spotify:playlist:pl9");
+        assert_eq!(
+            named(&app),
+            ("Long Way Home".into(), Some(Page::Playlist("pl9".into())))
+        );
+        assume(&mut app, "spotify:playlist:unloaded");
+        assert_eq!(
+            named(&app),
+            ("Playlist".into(), Some(Page::Playlist("unloaded".into())))
+        );
+
+        app.album_pages.insert(
+            "alb1".into(),
+            AlbumPage {
+                album: Loadable::Loaded(crate::api::models::Album {
+                    id: "alb1".into(),
+                    uri: "spotify:album:alb1".into(),
+                    name: "Black Sands".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        assume(&mut app, "spotify:album:alb1");
+        assert_eq!(
+            named(&app),
+            ("Black Sands".into(), Some(Page::Album("alb1".into())))
+        );
+
+        assume(&mut app, "spotify:user:me:collection");
+        assert_eq!(named(&app), ("Liked Songs".into(), Some(Page::LikedSongs)));
+
+        app.track_cache.insert(
+            "xyz".into(),
+            crate::api::models::Track {
+                id: Some("xyz".into()),
+                uri: "spotify:track:xyz".into(),
+                name: "Wish You Were Here".into(),
+                ..Default::default()
+            },
+        );
+        assume(&mut app, "spotify:station:track:xyz");
+        assert_eq!(named(&app), ("Wish You Were Here Radio".into(), None));
+        assume(&mut app, "spotify:station:track:uncached");
+        assert_eq!(named(&app), ("Radio".into(), None));
     }
 
     /// Song radio opens the queue panel.
@@ -8254,6 +9548,7 @@ mod tests {
     /// checking it, so a URL that does not answer aborts the process. The
     /// sync runs every frame, so the answer is remembered -- which means
     /// emptying the cache has to forget it, or the path outlives the file.
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn the_media_controls_only_hear_about_artwork_that_exists() {
         // #given
@@ -8265,14 +9560,21 @@ mod tests {
         std::fs::write(&file, b"jpeg-ish").expect("a cached file");
 
         // #then nothing has been downloaded for this song yet
-        assert_eq!(app.media_art_file(url), None);
+        assert_eq!(app.media_art_file(&ctx, url), None);
+        assert!(
+            !app.backend.art().prefetch(&ctx, url),
+            "the miss should have started the download"
+        );
 
         // #when the cache holds it, that file is what the controls are told
         app.media_art = Some((url.to_owned(), file.clone()));
-        assert_eq!(app.media_art_file(url), Some(file.clone()));
+        assert_eq!(app.media_art_file(&ctx, url), Some(file.clone()));
 
         // #then another song is not covered by what is remembered
-        assert_eq!(app.media_art_file("https://i.scdn.co/image/def"), None);
+        assert_eq!(
+            app.media_art_file(&ctx, "https://i.scdn.co/image/def"),
+            None
+        );
 
         // #when the artwork cache is emptied, the remembered path goes too
         app.actions.push(Action::ClearArtCache);
@@ -8280,6 +9582,128 @@ mod tests {
         assert_eq!(app.media_art, None, "a path into a deleted cache");
 
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// MPRIS hands the desktop the artwork URL and reads no file, so the
+    /// controls have nothing to download for it: the full-size cover is
+    /// fetched on the platforms that load the image themselves.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_media_controls_are_told_no_file_and_download_nothing() {
+        // #given
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        let url = "https://i.scdn.co/image/abc";
+
+        // #then MPRIS is left to the URL alone
+        assert_eq!(app.media_art_file(&ctx, url), None);
+        assert!(
+            app.backend.art().prefetch(&ctx, url),
+            "a download was started for artwork nothing here reads"
+        );
+    }
+
+    /// Emptying the artwork cache has to let the cover come back. The files
+    /// are gone, so what the loader remembers of them goes too: an entry
+    /// left behind answers the next request with a file that is no longer
+    /// there, and the playing song stays coverless until the track changes.
+    #[test]
+    fn clearing_the_artwork_cache_lets_the_cover_come_back() {
+        // #given artwork that has already been asked for
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let url = "https://i.scdn.co/image/abc";
+        assert!(app.backend.art().prefetch(&ctx, url), "the first request");
+
+        // #when the artwork cache is emptied
+        app.actions.push(Action::ClearArtCache);
+        app.apply_actions(&ctx);
+
+        // #then the next request downloads it again
+        assert!(
+            app.backend.art().prefetch(&ctx, url),
+            "the loader still remembers artwork that has been deleted"
+        );
+    }
+
+    #[test]
+    fn thumbnail_transport_tracks_optimistic_pause_and_window_recreation() {
+        use crate::thumbbar::{Icon, ThumbCommand, buttons};
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let ctx = egui::Context::default();
+        assert!(!app.thumb_state(true).has_track);
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:thumbnail".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        let state = app.thumb_state(true);
+        assert!(state.has_track && state.playing && state.can_control);
+        assert_eq!(buttons(&state)[1].icon, Icon::Pause);
+        app.apply(ThumbCommand::PlayPause.action(&state).unwrap(), &ctx);
+        assert_eq!(
+            buttons(&app.thumb_state(true))[1].icon,
+            Icon::Play,
+            "pause updates before a backend reply"
+        );
+        app.window_gone();
+        app.attach(&ctx);
+        assert_eq!(buttons(&app.thumb_state(false))[1].icon, Icon::Play);
+        assert!(!app.thumb_state(false).dark);
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn changing_mini_taskbar_visibility_recreates_only_an_open_mini_window() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        let ctx = egui::Context::default();
+        app.apply(Action::SetWinampTaskbar(false), &ctx);
+        assert!(!app.settings.winamp_show_taskbar);
+        assert!(!app.switch_intent, "settings do not close the main window");
+        app.settings.winamp_window = true;
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:continues".into(),
+            ..Default::default()
+        });
+        app.local.playback = Playback::Playing;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.apply(Action::SetWinampTaskbar(true), &ctx);
+        });
+        output.textures_delta.clear();
+        assert!(app.settings.winamp_window && app.switch_intent);
+        assert!(!app.hide_intent && !app.quit_requested);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
+        );
+        assert_eq!(app.local.playback, Playback::Playing);
+        assert_eq!(
+            app.local.track.as_ref().unwrap().uri,
+            "spotify:track:continues"
+        );
+        app.switch_intent = false;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.apply(Action::SetWinampTaskbar(true), &ctx);
+        });
+        output.textures_delta.clear();
+        assert!(!app.switch_intent);
+        assert!(
+            !output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
+        );
+        app.apply(Action::ToggleWinampWindow, &ctx);
+        assert!(
+            !app.settings.winamp_window,
+            "returning to the main interface remains available"
+        );
+        app.backend.shutdown();
     }
 
     fn headless_app() -> App {
@@ -8296,11 +9720,30 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );
         app.local_ready = true;
         app
+    }
+
+    fn seed_playlist(app: &mut App, id: &str) {
+        app.playlist_pages
+            .insert(id.to_string(), PlaylistPage::default());
+        app.open(Page::Playlist(id.to_string()));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    fn store_track(app: &mut App, id: &str) {
+        app.track_cache.insert(
+            id.to_string(),
+            Track {
+                id: Some(id.to_string()),
+                uri: format!("spotify:track:{id}"),
+                ..Track::default()
+            },
+        );
     }
 
     #[test]
@@ -8322,6 +9765,131 @@ mod tests {
             app.now_playing().expect("playing").playing,
             "the second toggle must see the first pause, not the drawing snapshot"
         );
+    }
+
+    #[test]
+    fn page_cache_stays_bounded_when_history_is_long() {
+        let mut app = headless_app();
+        for i in 0..20 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        assert!(
+            app.playlist_pages.len() <= 12,
+            "history must not protect more pages than the cap: {}",
+            app.playlist_pages.len()
+        );
+        assert!(
+            app.playlist_pages.contains_key("pl19"),
+            "the open page stays"
+        );
+        assert!(
+            !app.playlist_pages.contains_key("pl0"),
+            "the oldest page is dropped"
+        );
+    }
+
+    #[test]
+    fn navigating_past_the_cache_limit_keeps_edits_until_every_write_and_snapshot_is_confirmed() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.playlist_pages.insert(
+            "edited".into(),
+            PlaylistPage {
+                playlist: Loadable::Loaded(Playlist {
+                    id: "edited".into(),
+                    snapshot_id: Some("old".into()),
+                    items_count: Some(TrackCount { total: 1 }),
+                    ..Default::default()
+                }),
+                items: PagedList {
+                    items: vec![cached_playlist_row("spotify:track:first")],
+                    total: Some(1),
+                    next_offset: None,
+                    loaded_once: true,
+                    ..Default::default()
+                },
+                cache_checked: true,
+                ..Default::default()
+            },
+        );
+        app.open(Page::Playlist("edited".into()));
+        for uri in ["spotify:track:second", "spotify:track:third"] {
+            app.apply(
+                Action::ConfirmAddToPlaylist {
+                    position: None,
+                    playlist_id: "edited".into(),
+                    playlist_name: "Edited".into(),
+                    items: vec![cached_playlist_row(uri).playable().unwrap().clone()],
+                },
+                &egui::Context::default(),
+            );
+        }
+        assert_eq!(app.playlist_pages["edited"].pending_writes, 2);
+        for i in 0..25 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        app.open(Page::Playlist("edited".into()));
+        let rows = |app: &App| {
+            app.playlist_pages["edited"]
+                .items
+                .items
+                .iter()
+                .filter_map(|item| item.playable().map(|item| item.uri().to_string()))
+                .collect::<Vec<_>>()
+        };
+        let expected = [
+            "spotify:track:first",
+            "spotify:track:second",
+            "spotify:track:third",
+        ];
+        assert_eq!(rows(&app), expected);
+        app.handle_api(ApiResponse::PlaylistItemsChanged {
+            id: "edited".into(),
+            message: String::new(),
+            result: Ok(Some("first-write".into())),
+        });
+        let generation = app.playlist_pages["edited"].generation;
+        let metadata = |snapshot: &str| ApiResponse::Playlist {
+            id: "edited".into(),
+            generation,
+            result: Ok(Playlist {
+                id: "edited".into(),
+                snapshot_id: Some(snapshot.into()),
+                items_count: Some(TrackCount { total: 3 }),
+                ..Default::default()
+            }),
+        };
+        app.handle_api(metadata("first-write"));
+        assert_eq!(app.playlist_pages["edited"].pending_writes, 1);
+        assert!(app.playlist_pages["edited"].optimistic_snapshot.is_none());
+        for i in 25..50 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        assert_eq!(rows(&app), expected, "one write is still pending");
+        app.handle_api(ApiResponse::PlaylistItemsChanged {
+            id: "edited".into(),
+            message: String::new(),
+            result: Ok(Some("second-write".into())),
+        });
+        app.handle_api(metadata("first-write"));
+        for i in 50..75 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        app.open(Page::Playlist("edited".into()));
+        assert_eq!(
+            rows(&app),
+            expected,
+            "lagging metadata cannot lose the edit"
+        );
+        app.handle_api(metadata("second-write"));
+        for i in 75..100 {
+            seed_playlist(&mut app, &format!("other-{i}"));
+        }
+        assert!(
+            !app.playlist_pages.contains_key("edited"),
+            "confirmed edits stop protecting an old page"
+        );
+        assert!(app.playlist_pages.len() <= 12);
     }
 
     #[test]
@@ -8358,6 +9926,48 @@ mod tests {
         assert_eq!(
             app.now_playing().expect("handoff").uri,
             "spotify:track:remote"
+        );
+    }
+
+    #[test]
+    fn going_back_refreshes_page_recency() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        for _ in 0..11 {
+            app.apply(Action::Back, &ctx);
+        }
+        assert_eq!(app.page(), &Page::Playlist("pl0".into()));
+        seed_playlist(&mut app, "pl12");
+        assert!(
+            app.playlist_pages.contains_key("pl0"),
+            "a playlist revisited through Back must not be the oldest"
+        );
+        assert!(
+            !app.playlist_pages.contains_key("pl11"),
+            "the page left behind by history is the one that goes"
+        );
+    }
+
+    #[test]
+    fn page_cache_trims_data_that_arrives_after_navigation() {
+        let mut app = headless_app();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        app.open(Page::Playlist("current".into()));
+        app.playlist_pages
+            .insert("current".into(), PlaylistPage::default());
+        app.playlist_pages
+            .insert("late".into(), PlaylistPage::default());
+        app.evict_stale_pages();
+        assert!(app.playlist_pages.len() <= 12);
+        assert!(app.playlist_pages.contains_key("current"));
+        assert!(
+            !app.playlist_pages.contains_key("late"),
+            "a page that arrived after browsing still counts toward the cap"
         );
     }
 
@@ -8409,6 +10019,145 @@ mod tests {
         assert_eq!(
             name, "Fresh",
             "reused revision 0 must not keep the old rows"
+        );
+    }
+
+    #[test]
+    fn track_cache_is_an_lru_of_eight_hundred() {
+        let mut app = headless_app();
+        for i in 0..900 {
+            store_track(&mut app, &format!("t{i}"));
+        }
+        for i in 100..900 {
+            let _ = app.read_cached_track(&format!("t{i}"));
+        }
+        app.evict_stale_pages();
+        assert_eq!(app.track_cache.len(), 800);
+        assert!(
+            app.track_cache.contains_key("t899"),
+            "a cache hit must keep that track"
+        );
+        assert!(!app.track_cache.contains_key("t0"));
+    }
+
+    #[test]
+    fn reset_data_clears_cache_recency() {
+        let mut app = headless_app();
+        seed_playlist(&mut app, "pl0");
+        store_track(&mut app, "t0");
+        let _ = app.read_cached_track("t0");
+        assert!(!app.page_used.is_empty());
+        assert!(!app.track_used.is_empty());
+        app.reset_data();
+        assert!(app.page_used.is_empty());
+        assert!(app.track_used.is_empty());
+    }
+
+    #[test]
+    fn stepping_resume_keeps_a_cached_preview() {
+        use crate::api::models::{PlayableItem, PlaylistItem, Track};
+        use crate::model::PagedList;
+        let row = |uri: &str| PlaylistItem {
+            item: Some(PlayableItem::Track(Track {
+                id: Some(uri.rsplit(':').next().unwrap().into()),
+                uri: uri.into(),
+                name: uri.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        store_track(&mut app, "one");
+        store_track(&mut app, "two");
+        for i in 0..798 {
+            store_track(&mut app, &format!("old{i}"));
+            let _ = app.read_cached_track(&format!("old{i}"));
+        }
+        app.playlist_pages.insert(
+            "pl1".into(),
+            PlaylistPage {
+                items: PagedList {
+                    items: vec![row("spotify:track:one"), row("spotify:track:two")],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        app.resume_context = Some("spotify:playlist:pl1".into());
+        app.resume_track = Some("spotify:track:one".into());
+        app.apply(Action::Next, &ctx);
+        assert_eq!(app.resume_track.as_deref(), Some("spotify:track:two"));
+        store_track(&mut app, "overflow");
+        let _ = app.read_cached_track("overflow");
+        app.evict_stale_pages();
+        assert!(
+            app.track_cache.contains_key("two"),
+            "a cache hit while stepping resume must keep the song just previewed"
+        );
+        assert!(
+            !app.track_cache.contains_key("one"),
+            "the song left behind can go"
+        );
+    }
+
+    #[test]
+    fn requesting_a_cached_resume_track_keeps_it() {
+        let mut app = headless_app();
+        store_track(&mut app, "resume");
+        store_track(&mut app, "decoy");
+        for i in 0..798 {
+            store_track(&mut app, &format!("old{i}"));
+            let _ = app.read_cached_track(&format!("old{i}"));
+        }
+        app.resume_track = Some("spotify:track:resume".into());
+        app.request_resume_track();
+        store_track(&mut app, "overflow");
+        let _ = app.read_cached_track("overflow");
+        app.evict_stale_pages();
+        assert!(
+            app.track_cache.contains_key("resume"),
+            "a cache hit on the resume URI must keep that track"
+        );
+        assert!(
+            !app.track_cache.contains_key("decoy"),
+            "an untouched cached track can go"
+        );
+    }
+
+    #[test]
+    fn evict_stale_pages_drops_table_row_copies() {
+        let mut app = headless_app();
+        for i in 0..12 {
+            seed_playlist(&mut app, &format!("pl{i}"));
+        }
+        crate::ui::collection::cached_table_items(
+            &mut app,
+            Page::Playlist("pl0".into()),
+            0,
+            0,
+            0,
+            || {
+                vec![(
+                    PlayableItem::Track(Track {
+                        name: "Old".into(),
+                        uri: "spotify:track:old".into(),
+                        ..Track::default()
+                    }),
+                    None,
+                    None,
+                )]
+            },
+        );
+        assert!(app.table_rows.contains_key(&Page::Playlist("pl0".into())));
+        seed_playlist(&mut app, "pl12");
+        assert!(
+            !app.playlist_pages.contains_key("pl0"),
+            "the oldest playlist page is dropped"
+        );
+        assert!(
+            !app.table_rows.contains_key(&Page::Playlist("pl0".into())),
+            "its table-row copy must go with it"
         );
     }
 
@@ -8630,6 +10379,7 @@ mod tests {
 
         app.apply(
             Action::ConfirmAddToPlaylist {
+                position: None,
                 playlist_id: "best".into(),
                 playlist_name: "The best music ever".into(),
                 items: vec![added],
@@ -8669,6 +10419,224 @@ mod tests {
             "the optimistic rows become the cache for the returned snapshot"
         );
         assert_eq!(app.library.playlists.get().unwrap()[0].track_total(), 2);
+    }
+
+    #[test]
+    fn positioned_playlist_additions_keep_partial_pages_and_ignore_old_reads() {
+        for (base, position, scan_fails) in [
+            (0, 1, false),
+            (100, 101, false),
+            (100, 102, true),
+            (100, 50, false),
+        ] {
+            let mut app = headless_app();
+            app.backend.set_offline(true);
+            app.playlist_pages.insert(
+                "target".into(),
+                PlaylistPage {
+                    generation: 9,
+                    items_generation: 9,
+                    items: PagedList {
+                        base_offset: base,
+                        items: vec![
+                            cached_playlist_row("spotify:track:a"),
+                            cached_playlist_row("spotify:track:b"),
+                        ],
+                        total: Some(200),
+                        next_offset: Some(base + 2),
+                        loaded_once: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            let item = cached_playlist_row("spotify:track:new")
+                .playable()
+                .unwrap()
+                .clone();
+            app.request_playlist_add("target".into(), "Target".into(), vec![item], Some(position));
+            let mut sent = app.backend.take_playlist_add_requests();
+            assert_eq!(sent.len(), 1);
+            let ApiRequest::CheckPlaylistDuplicates {
+                playlist_id,
+                playlist_name,
+                items,
+                position: requested,
+            } = sent.pop().unwrap()
+            else {
+                panic!("expected duplicate check");
+            };
+            assert_eq!(requested, Some(position));
+            app.handle_api(ApiResponse::PlaylistDuplicatesChecked {
+                playlist_id,
+                playlist_name,
+                items,
+                position: requested,
+                result: if scan_fails {
+                    Err(crate::api::ApiError::Network("offline".into()))
+                } else {
+                    Ok(vec![])
+                },
+            });
+            let page = &app.playlist_pages["target"];
+            assert_eq!(page.items.total, Some(201));
+            assert_eq!(page.items.next_offset, Some(base + 3));
+            assert_eq!(
+                page.items.base_offset,
+                if position < base { base + 1 } else { base }
+            );
+            if position >= base {
+                assert_eq!(page.items.items.len(), 3);
+                assert_eq!(
+                    page.items.items[(position - base) as usize]
+                        .playable()
+                        .unwrap()
+                        .uri(),
+                    "spotify:track:new"
+                );
+            } else {
+                assert_eq!(page.items.items.len(), 2);
+            }
+            let held: Vec<_> = page
+                .items
+                .items
+                .iter()
+                .map(|row| row.playable().unwrap().uri().to_string())
+                .collect();
+            let sent = app.backend.take_playlist_add_requests();
+            assert!(
+                matches!(sent.as_slice(), [ApiRequest::AddToPlaylist { position: Some(at), .. }] if *at == position)
+            );
+            app.handle_api(ApiResponse::PlaylistItems {
+                id: "target".into(),
+                offset: base,
+                generation: 9,
+                result: Ok(crate::api::models::Page {
+                    items: vec![cached_playlist_row("spotify:track:old")],
+                    total: 200,
+                    ..Default::default()
+                }),
+            });
+            assert_eq!(
+                app.playlist_pages["target"]
+                    .items
+                    .items
+                    .iter()
+                    .map(|row| row.playable().unwrap().uri().to_string())
+                    .collect::<Vec<_>>(),
+                held
+            );
+            app.handle_api(ApiResponse::PlaylistItemsChanged {
+                id: "target".into(),
+                message: String::new(),
+                result: Ok(Some("new-snapshot".into())),
+            });
+            assert_eq!(
+                app.playlist_pages["target"]
+                    .items
+                    .items
+                    .iter()
+                    .map(|row| row.playable().unwrap().uri().to_string())
+                    .collect::<Vec<_>>(),
+                held
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_confirmation_keeps_the_requested_insertion_position() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.playlist_pages.insert(
+            "target".into(),
+            PlaylistPage {
+                items: PagedList {
+                    items: vec![
+                        cached_playlist_row("spotify:track:a"),
+                        cached_playlist_row("spotify:track:b"),
+                    ],
+                    total: Some(2),
+                    next_offset: None,
+                    loaded_once: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let item = cached_playlist_row("spotify:track:b")
+            .playable()
+            .unwrap()
+            .clone();
+        app.request_playlist_add(
+            "target".into(),
+            "Target".into(),
+            vec![item.clone()],
+            Some(0),
+        );
+        assert!(app.backend.take_playlist_add_requests().is_empty());
+        app.apply(Action::CloseDialog, &egui::Context::default());
+        assert_eq!(app.playlist_pages["target"].items.items.len(), 2);
+        app.request_playlist_add("target".into(), "Target".into(), vec![item], Some(0));
+        let Some(Dialog::ConfirmPlaylistDuplicates {
+            playlist_id,
+            playlist_name,
+            items,
+            position,
+            ..
+        }) = app.dialog.take()
+        else {
+            panic!("duplicate confirmation");
+        };
+        assert_eq!(position, Some(0));
+        app.apply(
+            Action::ConfirmAddToPlaylist {
+                playlist_id,
+                playlist_name,
+                items,
+                position,
+            },
+            &egui::Context::default(),
+        );
+        assert_eq!(
+            app.playlist_pages["target"]
+                .items
+                .items
+                .iter()
+                .map(|row| row.playable().unwrap().uri())
+                .collect::<Vec<_>>(),
+            ["spotify:track:b", "spotify:track:a", "spotify:track:b"]
+        );
+        assert!(matches!(
+            app.backend.take_playlist_add_requests().as_slice(),
+            [ApiRequest::AddToPlaylist {
+                position: Some(0),
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn appending_before_any_playlist_page_is_loaded_keeps_the_first_page_offset() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.playlist_pages
+            .insert("target".into(), PlaylistPage::default());
+        app.add_to_playlist_now(
+            "target".into(),
+            "Target".into(),
+            vec![
+                cached_playlist_row("spotify:track:new")
+                    .playable()
+                    .unwrap()
+                    .clone(),
+            ],
+            None,
+        );
+        assert_eq!(app.playlist_pages["target"].items.next_offset, Some(0));
+        assert!(matches!(
+            app.backend.take_playlist_add_requests().as_slice(),
+            [ApiRequest::AddToPlaylist { position: None, .. }]
+        ));
     }
 
     #[test]
@@ -8791,6 +10759,7 @@ mod tests {
         app.playlist_busy = true;
 
         app.handle_api(ApiResponse::PlaylistDuplicatesChecked {
+            position: None,
             playlist_id: "mix".into(),
             playlist_name: "Night mix".into(),
             items: vec![
@@ -8814,6 +10783,7 @@ mod tests {
 
         app.apply(
             Action::ConfirmAddToPlaylist {
+                position: None,
                 playlist_id: "mix".into(),
                 playlist_name: "Night mix".into(),
                 items: vec![
@@ -8837,6 +10807,7 @@ mod tests {
         app.playlist_busy = true;
 
         app.handle_api(ApiResponse::PlaylistDuplicatesChecked {
+            position: None,
             playlist_id: "mix".into(),
             playlist_name: "Night mix".into(),
             items: vec![
@@ -9515,7 +11486,10 @@ mod tests {
             track: Some(crate::player::LocalTrack {
                 uri: "spotify:track:t1".to_owned(),
                 title: "Go".to_owned(),
-                artists: vec!["The Band".to_owned()],
+                artists: vec![ArtistRef {
+                    name: "The Band".to_owned(),
+                    ..ArtistRef::default()
+                }],
                 album: "First".to_owned(),
                 art_url: Some("https://i.scdn.co/image/abc".to_owned()),
                 duration_ms: 200_000,
@@ -9582,7 +11556,7 @@ mod tests {
             is_active: true,
             ..Device::default()
         }])));
-        app.sync_media_controls();
+        app.sync_media_controls(&egui::Context::default());
 
         // #then
         let written = slot.lock().expect("the slot").clone();
@@ -9853,6 +11827,7 @@ mod tests {
         };
         let options = || AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
         let entries = vec![
@@ -9992,6 +11967,136 @@ mod tests {
                 100.0, 150.0
             ))),
             "attach restored the main window position: {commands:?}"
+        );
+    }
+
+    fn cached_liked_app() -> App {
+        use crate::api::models::SavedTrack;
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.user = Some(User {
+            id: "alice".into(),
+            ..Default::default()
+        });
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.liked_songs.cache_checked = true;
+        app.load_generation = 1;
+        app.liked_songs.start_refresh(1);
+        app.liked_songs.absorb(
+            0,
+            crate::api::models::Page {
+                items: (0..100)
+                    .map(|n| SavedTrack {
+                        track: Track {
+                            uri: format!("spotify:track:{n}"),
+                            id: Some(n.to_string()),
+                            name: format!("Song {n}"),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                    .collect(),
+                total: 100,
+                limit: 100,
+                ..Default::default()
+            },
+            jiff::Timestamp::now().as_second(),
+        );
+        app.sync_liked_songs();
+        app
+    }
+
+    #[test]
+    fn liked_cache_ignores_another_account_and_late_responses_after_sign_out() {
+        let mut app = cached_liked_app();
+        let cache = app.liked_songs.checkpoint("alice".into(), true).unwrap();
+        app.reset_data();
+        app.user = Some(User {
+            id: "bob".into(),
+            ..Default::default()
+        });
+        app.ensure_liked_songs();
+        let generation = app.liked_songs.generation;
+        app.receive_liked_cache("alice", generation, Some(cache.clone()));
+        assert!(app.library.liked.items.is_empty());
+        app.handle_api(ApiResponse::SavedTracks {
+            offset: 0,
+            generation,
+            account_id: Some("alice".into()),
+            result: Ok(crate::api::models::Page {
+                items: vec![crate::api::models::SavedTrack::default()],
+                ..Default::default()
+            }),
+        });
+        assert!(app.library.liked.items.is_empty());
+        app.reset_data();
+        app.user = None;
+        app.receive_liked_cache("bob", generation, Some(cache));
+        assert!(!app.liked_songs.cache_checked);
+        assert!(app.library.liked.items.is_empty());
+    }
+
+    #[test]
+    fn liking_and_unliking_update_rows_before_the_network_answers() {
+        let mut app = cached_liked_app();
+        app.set_saved("spotify:track:0".into(), false);
+        assert_eq!(app.library.liked.items.len(), 99);
+        assert!(
+            !app.library
+                .liked
+                .items
+                .iter()
+                .any(|item| item.track.uri == "spotify:track:0")
+        );
+        app.set_saved("spotify:track:new".into(), true);
+        assert_eq!(app.library.liked.items.len(), 100);
+        assert_eq!(app.library.liked.items[0].track.uri, "spotify:track:new");
+        app.handle_api(ApiResponse::SavedChanged {
+            uris: vec!["spotify:track:new".into()],
+            saved: true,
+            result: Ok(()),
+        });
+        assert_eq!(
+            app.library.liked.items.len(),
+            100,
+            "acknowledging a like does not clear the list"
+        );
+        assert_eq!(app.library.liked.items[0].track.uri, "spotify:track:new");
+        app.handle_api(ApiResponse::Contains {
+            uris: vec!["spotify:track:new".into()],
+            result: Ok(vec![false]),
+        });
+        assert_eq!(app.is_saved("spotify:track:new"), Some(true));
+    }
+
+    #[test]
+    fn manual_liked_refresh_keeps_rows_sort_and_selection_while_loading() {
+        let mut app = cached_liked_app();
+        let sort = TableSort {
+            column: SortColumn::Title,
+            ascending: false,
+        };
+        app.table_sorts.insert(Page::LikedSongs, sort);
+        app.pick_row(&Page::LikedSongs, "liked", 7, RowPick::Only, 100);
+        let revision = app.library.liked.revision;
+        app.refresh_liked_songs();
+        assert_eq!(app.library.liked.items.len(), 100);
+        assert_eq!(app.library.liked.revision, revision);
+        assert_eq!(app.table_sorts[&Page::LikedSongs], sort);
+        assert_eq!(picked(&app, &Page::LikedSongs), vec![7]);
+        assert!(app.library.liked.loading);
+        app.handle_api(ApiResponse::SavedTracks {
+            offset: 0,
+            generation: 1,
+            account_id: Some("alice".into()),
+            result: Ok(crate::api::models::Page::default()),
+        });
+        assert_eq!(
+            app.library.liked.items.len(),
+            100,
+            "a previous load cannot replace current rows"
         );
     }
 

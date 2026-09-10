@@ -1,0 +1,109 @@
+# Italian translation of the Fastpotify navigation pilot.
+# Distributed under the same MIT license as Fastpotify.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Fastpotify\n"
+"Report-Msgid-Bugs-To: https://github.com/crmne/fastpotify/issues/new?"
+"template=translation.yml\n"
+"POT-Creation-Date: 2026-09-09 16:31+0200\n"
+"PO-Revision-Date: 2026-09-09 13:30+0000\n"
+"Last-Translator: Fastpotify contributors\n"
+"Language-Team: Italian\n"
+"Language: it\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: src/ui/sidebar.rs:49
+msgid "Liked Songs"
+msgstr "Brani che ti piacciono"
+
+#: src/ui/sidebar.rs:52
+msgid "Playlist"
+msgstr "Playlist"
+
+#: src/ui/sidebar.rs:91
+msgid "Library order"
+msgstr "Ordine della libreria"
+
+#: src/ui/sidebar.rs:94
+msgid "Recently played"
+msgstr "Ascoltati di recente"
+
+#: src/ui/sidebar.rs:96
+msgid "Name"
+msgstr "Nome"
+
+#: src/ui/sidebar.rs:99
+msgid "Recently added"
+msgstr "Aggiunti di recente"
+
+#: src/ui/sidebar.rs:101
+msgid "Local custom order"
+msgstr "Ordine personalizzato locale"
+
+#: src/ui/sidebar.rs:104
+msgid "Spotify custom order"
+msgstr "Ordine personalizzato Spotify"
+
+#: src/ui/sidebar.rs:503 src/i18n.rs:102 src/i18n.rs:105
+msgid "Home"
+msgstr "Home"
+
+#: src/ui/sidebar.rs:514
+msgid "Search"
+msgstr "Cerca"
+
+#: src/ui/sidebar.rs:546
+msgid "Library"
+msgstr "Libreria"
+
+#: src/ui/sidebar.rs:559
+msgid "Hide sidebar (Ctrl+B)"
+msgstr "Nascondi barra laterale (Ctrl+B)"
+
+#: src/ui/sidebar.rs:560
+msgid "Hide sidebar (Cmd+B)"
+msgstr "Nascondi barra laterale (Cmd+B)"
+
+#: src/ui/sidebar.rs:574
+msgid "Create a playlist"
+msgstr "Crea una playlist"
+
+#: src/ui/sidebar.rs:590
+msgid "Search Your Library"
+msgstr "Cerca nella libreria"
+
+#: src/ui/sidebar.rs:608
+msgid "Playlists"
+msgstr "Playlist"
+
+#: src/ui/sidebar.rs:609
+msgid "Albums"
+msgstr "Album"
+
+#: src/ui/sidebar.rs:610
+msgid "Artists"
+msgstr "Artisti"
+
+#: src/ui/sidebar.rs:611
+msgid "Podcasts"
+msgstr "Podcast"
+
+#: src/ui/sidebar.rs:631
+msgid "Search in Your Library"
+msgstr "Cerca nella tua libreria"
+
+#: src/ui/sidebar.rs:765
+msgid "Artist"
+msgstr "Artista"
+
+#. Translators: Keep {count} exactly as written. It becomes the number of liked songs.
+#: src/i18n.rs:66
+#, rust-format
+msgid "Playlist • {count} song"
+msgid_plural "Playlist • {count} songs"
+msgstr[0] "Playlist • {count} brano"
+msgstr[1] "Playlist • {count} brani"

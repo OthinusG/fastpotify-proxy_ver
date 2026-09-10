@@ -32,6 +32,27 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_width(420.0);
             match dialog {
+                Dialog::PersonalAppIntro => {
+                    theme::text(ui, "Spend less time waiting for Spotify", theme::bold(20.0), palette.text);
+                    ui.add_space(12.0);
+                    for text in [
+                        "Fastpotify's default connection shares Spotify's request limit with other listeners. When it gets busy, loading music and using playback controls can take longer.",
+                        "Your Premium account lets you create a free personal Spotify app. Connect it here to give supported requests your own allowance. Some pages still use the shared connection.",
+                        "Setup takes a few minutes. You can also find it later in Settings under Personal Spotify app.",
+                    ] {
+                        ui.add(egui::Label::new(egui::RichText::new(text).font(theme::regular(14.0)).color(palette.secondary)).wrap());
+                        ui.add_space(10.0);
+                    }
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if theme::pill_button(ui, &palette, "Set up personal app", true).clicked() {
+                            app.actions.push(Action::OpenPersonalAppSetup);
+                        }
+                        if theme::pill_button(ui, &palette, "Keep shared app", false).clicked() {
+                            app.actions.push(Action::CloseDialog);
+                        }
+                    });
+                }
                 Dialog::CreatePlaylist { .. } => create_playlist(app, ui),
                 Dialog::EditPlaylist { .. } => edit_playlist(app, ui),
                 Dialog::ConfirmDeletePlaylist { id, name, owned } => {
@@ -80,6 +101,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     playlist_id,
                     playlist_name,
                     items,
+                    position,
                     duplicate_uris,
                 } => {
                     let multiple = items.len() > 1;
@@ -110,6 +132,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 playlist_id: playlist_id.clone(),
                                 playlist_name: playlist_name.clone(),
                                 items: items.clone(),
+                                position,
                             });
                         }
                         if theme::pill_button(ui, &palette, "Cancel", false).clicked() {

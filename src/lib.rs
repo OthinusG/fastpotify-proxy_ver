@@ -5,11 +5,14 @@ pub mod app;
 pub mod auth;
 pub mod backend;
 pub mod bidi;
+pub mod credentials;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
 pub mod eq;
 pub mod history;
+pub mod i18n;
 pub mod images;
+pub mod liked;
 pub mod limiter;
 pub mod link;
 pub mod lyrics;
@@ -38,6 +41,7 @@ pub mod sink;
 pub mod skin;
 pub mod system_fonts;
 pub mod theme;
+pub mod thumbbar;
 #[cfg(target_os = "linux")]
 pub mod tray;
 #[cfg(not(target_os = "linux"))]

@@ -39,10 +39,16 @@ struct Cli {
     demo_page: Option<String>,
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
-    /// `devices`, `shortcuts`, `create`, `light`, `focus`.
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`, `personal-app`,
+    /// `windows-taskbar`, `german`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
+
+    /// Language for the navigation translation pilot. Requires demo mode.
+    #[cfg(feature = "demo")]
+    #[arg(long, value_enum)]
+    demo_language: Option<fastpotify::i18n::Locale>,
 
     /// Write a PNG of the demo window to this path and exit. Implies
     /// `--demo`. Without `--demo-size`, the shot is the window's own frame
@@ -373,12 +379,19 @@ fn main() -> eframe::Result<()> {
     #[allow(unused_mut)]
     let mut options = app::AppOptions::default();
     #[cfg(feature = "demo")]
+    if demo {
+        options.restore_sign_in = false;
+    }
+    #[cfg(feature = "demo")]
     if cli.demo_shot.is_some() {
         options = app::AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
     }
+    #[cfg(windows)]
+    let desktop_surfaces = options.media_controls;
     #[allow(unused_mut)]
     let mut app = app::App::new(&waker, dirs, settings, options);
     if let Some(guard) = &instance {
@@ -391,6 +404,9 @@ fn main() -> eframe::Result<()> {
     if demo {
         fastpotify::demo::populate(&mut app);
         fastpotify::demo::apply_flags(&mut app, cli.demo_page.as_deref(), cli.demo_show.as_deref());
+        if let Some(locale) = cli.demo_language {
+            app.locale = locale;
+        }
     }
     #[cfg(feature = "demo")]
     let shot = cli.demo_shot.clone().map(|path| Shot {
@@ -419,6 +435,8 @@ fn main() -> eframe::Result<()> {
         );
         #[cfg(not(feature = "demo"))]
         let options = native_options(false, mini, None);
+        #[cfg(windows)]
+        let thumbbar_enabled = desktop_surfaces && options.viewport.taskbar != Some(false);
         eframe::run_native(
             "Fastpotify",
             options,
@@ -439,10 +457,27 @@ fn main() -> eframe::Result<()> {
                     fastpotify::mac_menu::set_waker(move || ctx.request_repaint());
                 }
                 app.attach(&cc.egui_ctx);
+                #[cfg(windows)]
+                let thumbbar = {
+                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    let mut toolbar = fastpotify::thumbbar::ThumbBar::new();
+                    if thumbbar_enabled
+                        && let Ok(handle) = cc.window_handle()
+                        && let RawWindowHandle::Win32(window) = handle.as_raw()
+                    {
+                        let wake = creator_waker.clone();
+                        // The shell and toolbar share this window's thread
+                        // and lifetime; the toolbar is detached on shell drop.
+                        unsafe { toolbar.attach(window.hwnd.get(), move || wake.wake()) };
+                    }
+                    toolbar
+                };
                 Ok(Box::new(Shell {
                     app: Some(app),
                     slot: std::sync::Arc::clone(&creator_slot),
                     mini_window,
+                    #[cfg(windows)]
+                    thumbbar,
                     #[cfg(feature = "demo")]
                     shot: creator_shot.clone(),
                 }))
@@ -551,6 +586,7 @@ struct MiniWindow {
     size: egui::Vec2,
     position: Option<[f32; 2]>,
     on_top: bool,
+    taskbar: bool,
     storage_path: std::path::PathBuf,
 }
 
@@ -560,6 +596,7 @@ impl MiniWindow {
             size: fastpotify::ui::winamp::initial_size(&app.settings),
             position: app.winamp.restore_pos,
             on_top: app.settings.winamp_on_top,
+            taskbar: app.settings.winamp_show_taskbar,
             storage_path: app.dirs.cache.join("winamp.ron"),
         })
     }
@@ -611,6 +648,7 @@ fn native_options(
     let viewport = egui::ViewportBuilder::default()
         .with_title("Fastpotify")
         .with_app_id("fastpotify")
+        .with_taskbar(true)
         .with_icon(icon);
     let viewport = match mini {
         Some(mini) => {
@@ -627,6 +665,8 @@ fn native_options(
                 .with_min_inner_size(mini.size)
                 .with_max_inner_size(mini.size)
                 .with_window_level(level);
+            // egui applies this native attribute on Windows only.
+            let viewport = viewport.with_taskbar(mini.taskbar);
             match mini.position {
                 Some([x, y]) => viewport.with_position([x, y]),
                 None => viewport,
@@ -689,6 +729,7 @@ mod native_window_tests {
                     size,
                     position: Some([300.0, 200.0]),
                     on_top: false,
+                    taskbar: true,
                     storage_path: std::path::PathBuf::from("cache/winamp.ron"),
                 }),
                 None,
@@ -710,6 +751,31 @@ mod native_window_tests {
         assert_eq!(options.viewport.fullsize_content_view, Some(true));
         assert_eq!(options.viewport.titlebar_shown, Some(false));
         assert_eq!(options.viewport.title_shown, Some(false));
+    }
+
+    #[test]
+    fn hiding_the_mini_taskbar_button_never_hides_the_main_window_button() {
+        for taskbar in [false, true] {
+            let mini = MiniWindow {
+                size: egui::vec2(550.0, 232.0),
+                position: Some([123.0, 456.0]),
+                on_top: true,
+                taskbar,
+                storage_path: "cache/winamp.ron".into(),
+            };
+            let options = native_options(false, Some(mini), None);
+            assert_eq!(options.viewport.taskbar, Some(taskbar));
+            assert_eq!(options.viewport.position, Some(egui::pos2(123.0, 456.0)));
+            assert_eq!(options.viewport.inner_size, Some(egui::vec2(550.0, 232.0)));
+            assert_eq!(
+                options.viewport.window_level,
+                Some(egui::WindowLevel::AlwaysOnTop)
+            );
+            assert_eq!(
+                native_options(false, None, None).viewport.taskbar,
+                Some(true)
+            );
+        }
     }
 
     #[test]
@@ -742,6 +808,8 @@ struct Shell {
     slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
     /// The mode this window opened in, even after an action switches modes.
     mini_window: bool,
+    #[cfg(windows)]
+    thumbbar: fastpotify::thumbbar::ThumbBar,
     /// A pending `--demo-shot` capture, if this is a screenshot run.
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
@@ -871,7 +939,16 @@ impl eframe::App for Shell {
                 };
                 app.actions.push(action);
             }
+            #[cfg(windows)]
+            for command in self.thumbbar.drain_commands() {
+                if let Some(action) = command.action(&app.thumb_state(false)) {
+                    app.actions.push(action);
+                }
+            }
             app.background_frame(ctx);
+            #[cfg(windows)]
+            self.thumbbar
+                .sync(app.thumb_state(ctx.system_theme() != Some(egui::Theme::Light)));
         }
         #[cfg(feature = "demo")]
         self.drive_shot(ctx);
@@ -880,6 +957,9 @@ impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
             app.frame_ui(ui);
+            #[cfg(windows)]
+            self.thumbbar
+                .sync(app.thumb_state(ui.ctx().system_theme() != Some(egui::Theme::Light)));
         }
     }
 
@@ -906,6 +986,8 @@ impl eframe::App for Shell {
 
 impl Drop for Shell {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        self.thumbbar.detach();
         *self.slot.lock().unwrap_or_else(|p| p.into_inner()) = self.app.take();
     }
 }

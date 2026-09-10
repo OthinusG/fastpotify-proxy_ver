@@ -13,9 +13,11 @@ Fastpotify follows each platform's conventions. On Linux:
 | Settings | `~/.config/fastpotify/settings.json` | Yes, you lose preferences |
 | Winamp skins | `~/.config/fastpotify/skins/` | Yes, you add them again |
 | MilkDrop presets | `~/.config/fastpotify/milkdrop/` | Yes, you fetch them again |
-| Shared Web API sign-in | `~/.local/state/fastpotify/shared_web_api_token.json` | Yes, you sign in again |
-| Personal Web API sign-in | `~/.local/state/fastpotify/personal_web_api_token.json` | Yes, the personal app is disabled |
-| Playback credential | `~/.local/state/fastpotify/credentials/` | Yes, you approve playback again |
+| Spotify grants (on `main`, after 0.7.1) | System credential store | Use Sign out in Settings |
+| Credential revocation markers (on `main`, after 0.7.1) | `~/.local/state/fastpotify/credential-storage/` | Keep after a failed sign-out deletion |
+| Legacy shared Web API grant | `~/.local/state/fastpotify/shared_web_api_token.json` | Removed after migration or sign-out |
+| Legacy personal Web API grant | `~/.local/state/fastpotify/personal_web_api_token.json` | Removed after migration or sign-out |
+| Legacy playback credential | `~/.local/state/fastpotify/credentials/` | Removed after migration or sign-out |
 | Last session | `~/.local/state/fastpotify/session.json` | Yes |
 | Play history | `~/.local/state/fastpotify/history.json` | Yes |
 | Audio cache | `~/.cache/fastpotify/audio/` | Always |
@@ -25,10 +27,51 @@ Fastpotify follows each platform's conventions. On Linux:
 | Last run's log | `~/.local/state/fastpotify/fastpotify.log` | Always |
 | Crash log | `~/.local/state/fastpotify/panic.log` | Always |
 
-Clearing caches never signs you out; credentials live in *state*, not
-*cache*. Web API token files are written with owner-only permissions.
-Signing out from Settings deletes both Web API grants and the separate
-playback credential.
+Clearing caches never signs you out. Sign-out from Settings covers the shared
+and personal Web API grants and the independent playback credential.
+
+The following credential storage is on `main`, for the release after 0.7.1.
+
+Durable grants use **Secret Service on Linux**, **Keychain on macOS**, and
+**Credential Manager on Windows**, under the service name
+`rocks.fastpotify.Fastpotify`. Entries are separated by application state
+location and grant type; Web grants carry their Client ID and must verify as
+the same account. Playback and receiver activation require that account too.
+Non-secret settings and session data remain readable JSON. Native credential
+protection reduces exposure from copying ordinary application files. It does
+not protect a usable session from arbitrary code running as the same user;
+Linux protection also depends on the desktop keyring's configuration.
+
+On Linux, enable and unlock a Secret Service provider such as GNOME Keyring or
+KWallet to remember a new sign-in. Flatpak is allowed to talk to
+`org.freedesktop.secrets` for this purpose. An unavailable or locked store
+produces an error without blocking the interface. A new sign-in can still be
+used for this session, with no new plaintext fallback file.
+
+On upgrade, each legacy grant is written to the protected store and read back
+before its old file is removed. Valid grants migrate without signing in again.
+If Spotify rejects a saved refresh grant, only that grant is forgotten so the
+next launch cannot keep restoring it. If migration fails, Fastpotify reports it and
+keeps the original so migration can be retried. That grant can still serve the
+current session. A successfully migrated grant is never replaced by a stale
+legacy copy. Librespot's reusable grant stays in memory until Fastpotify saves
+it through this same store. Volume and disposable audio caches are independent.
+
+Sign-out invalidates pending authorization, refresh, and playback connections,
+and cancels pending Spotify requests so their results cannot undo a new sign-in.
+It records non-secret revocation markers before deleting the protected entries
+and all legacy token files, including temporary copies. A locked store or
+filesystem failure is reported. Revocation markers prevent a failed protected
+entry deletion from restoring the session on restart; keep these markers when
+a deletion failed. Removing or changing a personal Client ID clears that app's
+old grant.
+
+Version 0.7.1 and earlier use the legacy unencrypted files listed above. Their
+Web API writer requests owner-only permissions for newly created Unix files;
+Windows uses inherited permissions. Librespot's old writer uses the system's
+file defaults. Keep these legacy files, their temporary copies, the
+`credentials/` directory, and credential-store exports out of issue attachments
+and diagnostic uploads.
 
 Progress through a playlist is periodically cached as a contiguous prefix.
 When the playlist has not changed on Spotify, reopening it resumes from that
@@ -38,9 +81,30 @@ Successful playlist edits keep that loaded prefix and save it under Spotify's
 new snapshot. Fastpotify reloads the playlist only if the write fails and the
 optimistic edit must be reconciled.
 
+The following Liked Songs caching behavior is on `main`, for the release
+after 0.7.1.
+
+Liked Songs metadata is stored separately under `liked-songs/` in the cache
+directory, one JSON file per account. Only the verified account's rows are
+shown. Fresh cached pages are reused for 15 minutes; older pages refresh in
+the background. Refreshing keeps the last usable rows until their replacement
+is ready, and a failed refresh leaves those rows visible. The refresh control
+requests current data immediately. Partial caches resume from their next page.
+Like and Unlike change the rows immediately, and confirmed edits survive a
+restart even if Spotify's next read still reports the old state. This cache
+contains metadata, not offline audio, and can be deleted without signing out.
+
 The last good playlist folder tree is kept in `session.json`, scoped to the
 account that supplied it. This keeps folders visible when local playback is
 temporarily unavailable. Live session data is still required for edit grants.
+
+On `main`, for the release after 0.7.1, memory caches retain the open page,
+the playing context, and a limited set of recently used playlist, album,
+artist, and show pages. Older pages reload when revisited, using the saved
+playlist prefix when its snapshot still matches. Pending playlist edits and
+their rows stay in memory until the write and its snapshot are confirmed,
+even if this temporarily exceeds the usual page limit. Track metadata is
+limited to 800 cached tracks; navigation and periodic cleanup trim old entries.
 
 The session remembers separate positions for the main window and the Winamp
 mini player. The shade modes are kept in `settings.json`. Wayland compositors
@@ -52,6 +116,13 @@ Large playlist pages also have a **Go to song** control. Entering a song
 number loads its 50-item page directly, without requesting every earlier page.
 Filtering or sorting still covers the whole playlist, so either action returns
 to the beginning and loads the remaining pages as needed.
+
+On `main`, for the release after 0.7.1, Flatpak also preserves the fallback
+state directory used when `XDG_STATE_HOME` is unset. Session state, history,
+logs, and credential revocation markers survive a full quit and relaunch under
+`~/.var/app/rocks.fastpotify.Fastpotify/.local/state/fastpotify/`. Configuration
+and caches remain under the app's `config/` and `cache/` directories. State
+already lost on quitting an older release cannot be recovered.
 
 On macOS, settings, state, and the logs are in
 `~/Library/Application Support/me.paolino.fastpotify` and the caches in
@@ -78,9 +149,14 @@ main fields are:
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
 | `theme` | `dark` | `dark`, `light`, or `system` |
 | `accent_from_art` | `true` | Tint pages with album art |
+| `library_sort` | `{}` | Per-section Library order overrides, after 0.7.1: `library`, `recently_played`, `name`, `recently_added`, `local`, or `spotify`, where supported |
+| `sidebar_order` | `[]` | Saved local playlist arrangement, including an unpinned Liked Songs, retained when another sort is selected |
+| `pinned_contexts` | `[]` | Local Library pin order; Liked Songs uses `fastpotify:liked-songs`, a local key never sent to Spotify |
+| `liked_songs_pinned` | `true` | Keep Liked Songs in the pin block; older settings place it first until moved |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
 | `winamp_window` | `false` | The window is the Winamp mini player |
+| `winamp_show_taskbar` | `true` | Windows only, after 0.7.1: show the Winamp window's taskbar button; the main window always keeps its button |
 | `skin` | none | File or folder name in the skins folder; blank uses the built-in skin |
 | `skin_scale` | by display | Screen pixels per skin pixel, 1 to 4 |
 | `winamp_on_top` | `false` | Keep the mini player above other windows |
@@ -104,7 +180,8 @@ main fields are:
 | `keep_playing_in_background` | `true` | Close to tray |
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
 | `web_client_id` | none | Optional personal Spotify app id used alongside shared coverage |
-| `personal_app_nudge_at` | none | Last slow-Spotify personal-app reminder, so it appears at most once a day |
+| `personal_app_nudge_at` | none | Legacy daily-reminder timestamp, retained for older releases |
+| `personal_app_intro_seen` | `false` | Whether the Premium personal-app introduction was dismissed or followed (on `main`, after 0.7.1) |
 
 When both proxy fields are set, Fastpotify routes its Internet HTTP requests
 and local Spotify playback through that proxy. Local-network receiver
@@ -140,7 +217,9 @@ settings.
 `--demo-page` opens a page, such as `home`, `playlist:pl1`, or `artist:art0`,
 and `--demo-show` adds surfaces on top of it: a comma separated list of
 `queue`, `playing-next`, `devices`, `shortcuts`, `premium`, `create`, `duplicate`, `light`,
-`focus`, `winamp`, `playlist`, `eq`, `eq-shade`, and `compact`.
+`focus`, `winamp`, `playlist`, `eq`, `eq-shade`, `compact`, `update`, and `personal-app`.
+`update` shows a sample update badge for checking its layout.
+`personal-app` shows the personal Spotify app introduction.
 
 `--demo-shot <PATH>` writes the window to a PNG and exits, which is useful for
 making deterministic screenshots for these pages:

@@ -67,6 +67,11 @@ picture. Zero volume still dances.
 - When a valid issue has a clear, bounded fix that can be implemented now,
   implement it instead of posting the proposed design in the issue. Do not use
   public comments as notes to yourself or as a substitute for doing the work.
+- Close a bug once its fix is on `main` and the relevant checks pass. State
+  which commit fixes it and whether it is released. Reporter confirmation is
+  welcome, but is not a routine requirement for closure; reopen if the problem
+  persists after updating. Keep an issue open when the fix is still uncertain
+  or only part of the report has been addressed.
 - Never post two maintainer comments in a row on the same issue or pull
   request. If nobody has replied since the last maintainer comment, edit that
   comment instead.
@@ -95,6 +100,14 @@ compiling and passing the checks on its own. Feature branches and pull
 requests are for outside contributors; the maintainer's own work, and
 work done with the maintainer, does not go through them.
 
+Keep `main` linear. Squash outside pull requests into one focused commit,
+preserving contributor credit. Never create or push merge commits, including
+local `git merge --no-ff` commits that bypass GitHub's squash-only setting.
+When updating a local checkout, use fast-forward-only pulls; rebase unpublished
+local commits if needed. Before pushing, verify that the commits being added
+contain no merge commits. Rewriting published history requires explicit
+maintainer approval and an exact force-with-lease guard; keep a recovery ref.
+
 ## Definition of done
 
 - Add focused regression tests for changed behaviour. Use the `demo` feature
@@ -113,6 +126,9 @@ A release is not the tag alone. Do these in order:
 
 1. Change the `Cargo.toml` version, add the matching release to the Flatpak
    metainfo, and update the lockfile with a build.
+   Refresh the `flake.nix` vendor hash when the lockfile changes, even when
+   only the package version changed. Verify `nix build .#default` locally or
+   in CI. Wait for every required CI job on the release commit before tagging.
    Commit and push this before the tag so the binaries report the right
    version.
 2. Push the `v*` tag, which triggers the release workflow. Wait for every
