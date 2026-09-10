@@ -40,8 +40,8 @@ fn section(
 }
 
 fn spawn_restarted_instance() -> Result<(), String> {
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("Unable to locate Fastpotify: {error}"))?;
+    let executable =
+        std::env::current_exe().map_err(|error| format!("Unable to locate Fastpotify: {error}"))?;
     let pid = std::process::id().to_string();
 
     #[cfg(windows)]
@@ -638,9 +638,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(ui, &palette, "Proxy status", &status, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if configured
-                    && theme::soft_button(ui, &palette, None, "Clear", false).clicked()
-                {
+                if configured && theme::soft_button(ui, &palette, None, "Clear", false).clicked() {
                     app.settings.proxy_server = None;
                     app.settings.proxy_port = None;
                     changed = true;
