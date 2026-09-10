@@ -154,6 +154,7 @@ const OK_REPLY: &str = "fastpotify:ok";
 const NOW_REPLY: &str = "fastpotify:now ";
 #[cfg(not(target_os = "linux"))]
 const DEVICES_REPLY: &str = "fastpotify:devices ";
+#[cfg(not(target_os = "linux"))]
 const BUILD_REPLY: &str = "fastpotify:build ";
 
 /// What the running instance said back.
