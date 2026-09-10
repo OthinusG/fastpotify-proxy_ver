@@ -4,7 +4,7 @@
 <dict>
     <key>CFBundleName</key><string>Fastpotify Proxy</string>
     <key>CFBundleDisplayName</key><string>Fastpotify Proxy</string>
-    <key>CFBundleIdentifier</key><string>me.paolino.fastpotify</string>
+    <key>CFBundleIdentifier</key><string>com.othinusg.fastpotify.proxy</string>
     <key>CFBundleExecutable</key><string>fastpotify</string>
     <key>CFBundleIconFile</key><string>fastpotify</string>
     <key>CFBundlePackageType</key><string>APPL</string>
