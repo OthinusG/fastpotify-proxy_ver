@@ -1,4 +1,4 @@
-name: Sync upstream and release macOS
+name: Sync upstream and release
 
 on:
   push:
@@ -11,11 +11,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: sync-upstream-macos
+  group: sync-upstream-release
   cancel-in-progress: false
 
 env:
   UPSTREAM_REPOSITORY: crmne/fastpotify
+  CARGO_TERM_COLOR: always
 
 jobs:
   sync:
@@ -41,9 +42,6 @@ jobs:
           git fetch upstream main
 
           if ! git merge-base --is-ancestor upstream/main HEAD; then
-            # Stop before committing so downstream-only workflows can always be
-            # restored before the merge commit is created. GitHub's Actions token
-            # cannot push upstream workflow-file changes back to this repository.
             if ! git merge --no-commit --no-ff upstream/main; then
               conflicts="$(git diff --name-only --diff-filter=U)"
 
@@ -62,11 +60,8 @@ jobs:
 
               git show :2:flake.nix > "$ours"
               git show :3:flake.nix > "$theirs"
-
-              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' \
-                "$ours" > "$ours_normalized"
-              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' \
-                "$theirs" > "$theirs_normalized"
+              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' "$ours" > "$ours_normalized"
+              sed -E 's#hash = "sha256-[^"]+";#hash = "__VENDOR_HASH__";#' "$theirs" > "$theirs_normalized"
 
               if ! cmp -s "$ours_normalized" "$theirs_normalized"; then
                 echo "::error::flake.nix differs beyond the Nix vendor hash; refusing automatic resolution."
@@ -77,17 +72,18 @@ jobs:
               echo "flake.nix conflicts only in the Nix vendor hash; keeping the proxy fork value."
               git checkout --ours -- flake.nix
               git add flake.nix
-
-              if git diff --name-only --diff-filter=U | grep -q .; then
-                echo "::error::Unresolved merge conflicts remain."
-                git merge --abort
-                exit 1
-              fi
             fi
 
-            # Keep this fork's CI/sync/release workflows. Upstream application
-            # code is merged normally, but upstream workflow changes are ignored.
+            # This fork owns its CI and release automation. Never import
+            # upstream workflow changes into the downstream merge commit.
             git restore --source=HEAD --staged --worktree -- .github/workflows
+
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              echo "::error::Unresolved merge conflicts remain."
+              git merge --abort
+              exit 1
+            fi
+
             git commit --no-edit
           fi
 
@@ -98,27 +94,24 @@ jobs:
           fi
           tag="v${version}"
 
-          # Always sync main first, even when this version already has a release.
+          # Always keep main synchronized, even when this version is already released.
           git push origin HEAD:main
 
-          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            if gh release view "$tag" >/dev/null 2>&1; then
-              echo "release=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            # A previous build may have created the version tag before release
-            # publication failed. Reuse it so a rerun can finish the release.
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          git tag "$tag"
-          git push origin "refs/tags/$tag"
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            git tag "$tag"
+            git push origin "refs/tags/$tag"
+          fi
+
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   macos:
+    name: macOS universal
     needs: sync
     if: needs.sync.outputs.release == 'true'
     runs-on: macos-latest
@@ -133,39 +126,152 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: proxy-macos-universal
-
       - name: Build universal app
         run: |
           set -euo pipefail
           cargo build --release --locked --target aarch64-apple-darwin
           cargo build --release --locked --target x86_64-apple-darwin
-          mkdir -p universal
+          mkdir -p universal dist
           lipo -create \
             target/aarch64-apple-darwin/release/fastpotify \
             target/x86_64-apple-darwin/release/fastpotify \
             -output universal/fastpotify
-          version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
-          bash packaging/macos/bundle.sh \
-            universal/fastpotify Fastpotify.app "$version"
-
-      - name: Package DMG
-        run: |
-          set -euo pipefail
-          name="fastpotify-proxy-${{ needs.sync.outputs.tag }}-macos-universal"
+          version="${{ needs.sync.outputs.tag }}"
+          version="${version#v}"
+          bash packaging/macos/bundle.sh universal/fastpotify Fastpotify.app "$version"
           stage="$RUNNER_TEMP/dmg"
-          mkdir -p "$stage" dist
+          mkdir -p "$stage"
           cp -R Fastpotify.app "$stage/"
           cp README.md LICENSE "$stage/"
           ln -s /Applications "$stage/Applications"
           hdiutil create -volname Fastpotify -srcfolder "$stage" -ov \
-            -format UDZO "dist/$name.dmg"
-          shasum -a 256 dist/*.dmg > dist/checksums.txt
+            -format UDZO "dist/fastpotify-${{ needs.sync.outputs.tag }}-macos-universal.dmg"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-universal
+          path: dist/*.dmg
+          if-no-files-found: error
 
+  windows:
+    name: Windows x64
+    needs: sync
+    if: needs.sync.outputs.release == 'true'
+    runs-on: windows-latest
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: rustup target add x86_64-pc-windows-msvc
+      - name: GLEW for libprojectM
+        run: vcpkg install glew:x64-windows-static
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: proxy-windows-x64
+      - name: Build and package
+        shell: pwsh
+        run: |
+          cargo build --release --locked --target x86_64-pc-windows-msvc
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $stage = "fastpotify-${{ needs.sync.outputs.tag }}-windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target\x86_64-pc-windows-msvc\release\fastpotify.exe" "$stage\fastpotify.exe"
+          Copy-Item README.md, LICENSE $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist\$stage.zip" -Force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64 deb
+    needs: sync
+    if: needs.sync.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
+            libwayland-dev libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev \
+            libxrandr-dev cmake libclang-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: proxy-linux-x64
+      - name: Build Debian package
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target x86_64-unknown-linux-gnu
+
+          version="${{ needs.sync.outputs.tag }}"
+          version="${version#v}"
+          root="$RUNNER_TEMP/fastpotify-deb"
+          mkdir -p "$root/DEBIAN" "$root/usr/bin" \
+            "$root/usr/share/applications" \
+            "$root/usr/share/icons/hicolor/scalable/apps" dist
+
+          install -m755 target/x86_64-unknown-linux-gnu/release/fastpotify "$root/usr/bin/fastpotify"
+          install -m644 packaging/applications/fastpotify.desktop \
+            "$root/usr/share/applications/fastpotify.desktop"
+          install -m644 packaging/icons/fastpotify.svg \
+            "$root/usr/share/icons/hicolor/scalable/apps/fastpotify.svg"
+
+          cat > "$root/DEBIAN/control" <<EOF
+          Package: fastpotify
+          Version: $version
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Maintainer: OthinusG
+          Depends: libc6, libasound2, libpulse0, libxkbcommon0, libwayland-client0, libgl1, libx11-6, libxcursor1, libxi6, libxrandr2
+          Description: Fastpotify native Spotify client with HTTP proxy support
+           Downstream proxy-enabled build synchronized with upstream Fastpotify.
+          EOF
+
+          dpkg-deb --build --root-owner-group "$root" \
+            "dist/fastpotify-${{ needs.sync.outputs.tag }}-linux-x64.deb"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x64-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [sync, macos, windows, linux]
+    if: ${{ needs.sync.outputs.release == 'true' && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.sync.outputs.tag }}
           name: Fastpotify Proxy ${{ needs.sync.outputs.tag }}
-          body: Automatic macOS proxy build aligned with the corresponding upstream Fastpotify version.
-          files: |
-            dist/*.dmg
-            dist/checksums.txt
+          body: |
+            Automatic proxy-enabled build synchronized with upstream Fastpotify.
+
+            Included downloads:
+            - macOS universal DMG (Apple Silicon + Intel)
+            - Windows x64 ZIP
+            - Linux x64 Debian package
+          files: dist/*
