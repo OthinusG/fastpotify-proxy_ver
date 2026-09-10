@@ -74,8 +74,6 @@ jobs:
               git add flake.nix
             fi
 
-            # This fork owns its CI and release automation. Never import
-            # upstream workflow changes into the downstream merge commit.
             git restore --source=HEAD --staged --worktree -- .github/workflows
 
             if git diff --name-only --diff-filter=U | grep -q .; then
@@ -94,7 +92,6 @@ jobs:
           fi
           tag="v${version}"
 
-          # Always keep main synchronized, even when this version is already released.
           git push origin HEAD:main
 
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -252,7 +249,7 @@ jobs:
   release:
     name: Publish release
     needs: [sync, macos, windows, linux]
-    if: ${{ needs.sync.outputs.release == 'true' && !cancelled() }}
+    if: ${{ needs.sync.outputs.release == 'true' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
