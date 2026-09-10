@@ -18,3 +18,4 @@
 - 2026-09-06: `.github/workflows/sync-upstream-macos.yml` polls upstream hourly, merges without force-pushing, and releases one ad-hoc-signed universal macOS DMG per detected upstream tip. Merge conflicts require manual resolution.
 - 2026-09-07: macOS Actions must explicitly add both Rust targets after toolchain setup because the repository-pinned toolchain, not only the action's requested toolchain, needs the target standard libraries.
 - 2026-09-07: Any Cargo dependency change must refresh the fixed-output `fetchCargoVendor` hash in `flake.nix`.
+- 2026-09-10: Upstream removed the downstream sync workflow and now edits many overlay files. The sync workflow is kept locally, merges with `-X ours`, and reapplies the downstream repository URLs after each merge. Update checks and Source code therefore target `OthinusG/fastpotify-proxy_ver`.
