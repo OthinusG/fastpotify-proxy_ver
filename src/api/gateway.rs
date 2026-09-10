@@ -130,33 +130,36 @@ fn classify_playlist(account: &AccountId, playlist: &Playlist) -> PlaylistAccess
 }
 
 struct Session {
-    state: RwLock<SessionState>,
-    client: Arc<ApiClient>,
+    // The counter remembers a sign-out even if a new sign-in becomes ready
+    // before a waiting request wakes up.
+    state: tokio::sync::watch::Sender<(u64, SessionState)>,
+    client: RwLock<Arc<ApiClient>>,
 }
 
 impl Session {
     fn new(http: reqwest::Client, activity: Arc<NetActivity>, profile: ApiProfile) -> Self {
         Self {
-            state: RwLock::new(SessionState::Unavailable),
-            client: Arc::new(ApiClient::new(
+            state: tokio::sync::watch::channel((0, SessionState::Unavailable)).0,
+            client: RwLock::new(Arc::new(ApiClient::new(
                 http,
                 activity,
                 profile.search_limit,
                 profile.artist_albums_limit,
                 profile.source,
-            )),
+            ))),
         }
     }
 
     fn state(&self) -> SessionState {
-        self.state
-            .read()
-            .unwrap_or_else(|lock| lock.into_inner())
-            .clone()
+        self.state.borrow().1.clone()
     }
 
     fn set_state(&self, state: SessionState) {
-        *self.state.write().unwrap_or_else(|lock| lock.into_inner()) = state;
+        self.state.send_modify(|current| current.1 = state);
+    }
+
+    fn client(&self) -> Arc<ApiClient> {
+        Arc::clone(&self.client.read().unwrap_or_else(|lock| lock.into_inner()))
     }
 }
 
@@ -214,18 +217,25 @@ impl ApiGateway {
 
     pub fn begin_verification(&self, source: ApiSource, provider: TokenProvider) {
         let session = self.session(source);
-        session.client.set_token_provider(Some(provider));
+        let client = session.client().for_authorization(provider);
+        *session
+            .client
+            .write()
+            .unwrap_or_else(|lock| lock.into_inner()) = Arc::new(client);
         session.set_state(SessionState::Authorizing);
     }
 
     pub fn verification_client(&self, source: ApiSource) -> Arc<ApiClient> {
-        Arc::clone(&self.session(source).client)
+        self.session(source).client()
     }
 
     pub fn clear(&self, source: ApiSource) {
         let session = self.session(source);
-        session.client.set_token_provider(None);
-        session.set_state(SessionState::Unavailable);
+        session.client().set_token_provider(None);
+        session.state.send_modify(|current| {
+            current.0 += 1;
+            current.1 = SessionState::Unavailable;
+        });
     }
 
     pub fn clear_all(&self) {
@@ -248,14 +258,28 @@ impl ApiGateway {
         matches!(self.state(ApiSource::Personal), SessionState::Ready { .. })
     }
 
-    pub fn client_for(&self, operation: Operation) -> Result<Arc<ApiClient>, ApiError> {
+    pub async fn client_for(&self, operation: Operation) -> Result<Arc<ApiClient>, ApiError> {
         let source = plan(operation, self.personal_ready());
         let session = self.session(source);
-        if !matches!(session.state(), SessionState::Ready { .. }) {
-            return Err(ApiError::NotSignedIn);
+        let mut state = session.state.subscribe();
+        let generation = state.borrow().0;
+        loop {
+            let (current, status) = state.borrow_and_update().clone();
+            if current != generation {
+                return Err(ApiError::NotSignedIn);
+            }
+            match status {
+                SessionState::Ready { .. } => break,
+                SessionState::Unavailable => return Err(ApiError::NotSignedIn),
+                // A personal grant can open the app before the shared grant
+                // finishes verification. Keep shared-only views loading.
+                SessionState::Authorizing => {
+                    state.changed().await.map_err(|_| ApiError::NotSignedIn)?;
+                }
+            }
         }
         log::debug!("Spotify route operation={operation:?} source={source}");
-        Ok(Arc::clone(&session.client))
+        Ok(session.client())
     }
 
     pub fn playlist_access(&self, id: &str) -> PlaylistAccess {
@@ -295,14 +319,81 @@ impl ApiGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+
+    #[tokio::test]
+    async fn shared_requests_wait_while_a_personal_session_is_already_ready() {
+        let gateway = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
+        gateway.set_state(ApiSource::Shared, SessionState::Authorizing);
+        gateway.begin_verification(
+            ApiSource::Personal,
+            provider("ready-personal", ApiSource::Personal),
+        );
+        gateway
+            .install(ApiSource::Personal, AccountId::new("same"))
+            .unwrap();
+        let mut waiting = Box::pin(gateway.client_for(Operation::PlaylistLibrary));
+        std::future::poll_fn(|cx| {
+            assert!(waiting.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        gateway.begin_verification(
+            ApiSource::Shared,
+            provider("slow-shared", ApiSource::Shared),
+        );
+        gateway
+            .install(ApiSource::Shared, AccountId::new("same"))
+            .unwrap();
+        let client = waiting.await.unwrap();
+        assert!(Arc::ptr_eq(
+            &client,
+            &gateway.verification_client(ApiSource::Shared)
+        ));
+    }
+
+    #[tokio::test]
+    async fn sign_out_cancels_waiting_requests_even_if_sign_in_finishes_before_they_wake() {
+        let gateway = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
+        gateway.begin_verification(ApiSource::Shared, provider("old-shared", ApiSource::Shared));
+        let old_client = gateway.verification_client(ApiSource::Shared);
+        let mut waiting = Box::pin(gateway.client_for(Operation::PlaylistLibrary));
+        std::future::poll_fn(|cx| {
+            assert!(waiting.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        gateway.clear_all();
+        gateway.begin_verification(ApiSource::Shared, provider("new-shared", ApiSource::Shared));
+        gateway
+            .install(ApiSource::Shared, AccountId::new("new-account"))
+            .unwrap();
+        assert!(matches!(waiting.await, Err(ApiError::NotSignedIn)));
+        assert!(matches!(old_client.me().await, Err(ApiError::NotSignedIn)));
+        let new_client = gateway
+            .client_for(Operation::PlaylistLibrary)
+            .await
+            .unwrap();
+        assert!(!Arc::ptr_eq(&old_client, &new_client));
+    }
 
     fn provider(name: &str, source: ApiSource) -> TokenProvider {
-        let path = std::env::temp_dir().join(format!("fastpotify-{name}-unused-token.json"));
+        let path = std::env::temp_dir().join(format!("fastpotify-{name}-unused-token"));
+        let store = crate::credentials::Store::in_memory(crate::paths::AppDirs {
+            config: path.join("config"),
+            state: path.join("state"),
+            cache: path.join("cache"),
+        });
         TokenProvider::Web(super::super::client::WebTokens::new(
             reqwest::Client::new(),
             crate::auth::StoredToken::default(),
-            path,
+            store.lease(if source == ApiSource::Shared {
+                crate::credentials::Slot::Shared
+            } else {
+                crate::credentials::Slot::Personal
+            }),
             source,
+            std::sync::Arc::new(|_| {}),
         ))
     }
 

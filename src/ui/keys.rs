@@ -5,7 +5,7 @@ use egui::{Key, Modifiers};
 use crate::app::App;
 use crate::model::{Action, Dialog, Page};
 
-pub(super) const fn platform_shortcut(ctrl: &'static str, cmd: &'static str) -> &'static str {
+pub(super) const fn platform_shortcut<'a>(ctrl: &'a str, cmd: &'a str) -> &'a str {
     if cfg!(target_os = "macos") { cmd } else { ctrl }
 }
 
@@ -281,6 +281,7 @@ mod tests {
             Settings::default(),
             AppOptions {
                 media_controls: false,
+                restore_sign_in: false,
                 tray: false,
             },
         );

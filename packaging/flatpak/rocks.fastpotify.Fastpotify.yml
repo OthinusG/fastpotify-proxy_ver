@@ -29,9 +29,14 @@ finish-args:
   - --share=network
   # The tray item, media keys and Now Playing over MPRIS, and the name the
   # single instance is found by.
+  # Platform storage for this application's Spotify grants.
+  - --talk-name=org.freedesktop.secrets
   - --talk-name=org.kde.StatusNotifierWatcher
   - --own-name=org.mpris.MediaPlayer2.fastpotify
   - --own-name=rocks.fastpotify.Instance
+  # Older Flatpak versions leave XDG_STATE_HOME unset. Keep the fallback
+  # state directory (session, history, logs, and credential markers) durable.
+  - --persist=.local/state
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:

@@ -37,6 +37,8 @@ type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 pub struct Receiver {
     /// The name it advertises, e.g. "House Spotify".
     pub name: String,
+    /// The receiver's stable Connect identity, after `getInfo` answers.
+    pub device_id: Option<String>,
     pub address: std::net::IpAddr,
     pub port: u16,
     /// Path its HTTP interface answers on, from the `CPath` TXT record.
@@ -101,25 +103,17 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    /// Reads the reusable credential librespot stored for local playback.
-    pub fn load(credentials_dir: &std::path::Path) -> Result<Self> {
-        #[derive(Deserialize)]
-        struct Stored {
-            username: String,
-            auth_type: i64,
-            auth_data: String,
-        }
-        let path = credentials_dir.join("credentials.json");
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("no stored playback credential at {}", path.display()))?;
-        let stored: Stored =
-            serde_json::from_str(&text).context("stored playback credential is unreadable")?;
+    /// Use the in-memory reusable grant already loaded from protected storage.
+    pub fn from_playback(stored: &librespot_core::authentication::Credentials) -> Result<Self> {
+        use protobuf::Enum;
         Ok(Self {
-            username: stored.username,
-            auth_type: stored.auth_type,
-            auth_data: BASE64
-                .decode(stored.auth_data)
-                .context("stored playback credential is malformed")?,
+            username: stored
+                .username
+                .clone()
+                .filter(|name| !name.is_empty())
+                .context("playback account is missing")?,
+            auth_type: i64::from(stored.auth_type.value()),
+            auth_data: stored.auth_data.clone(),
         })
     }
 }
@@ -162,6 +156,7 @@ pub fn discover(timeout: Duration) -> Result<Vec<Receiver>> {
                     service.get_fullname().to_string(),
                     Receiver {
                         name,
+                        device_id: None,
                         address,
                         port: service.get_port(),
                         path,
@@ -180,15 +175,72 @@ pub fn discover(timeout: Duration) -> Result<Vec<Receiver>> {
 
 /// Asks a receiver to describe itself.
 pub fn get_info(http: &reqwest::blocking::Client, receiver: &Receiver) -> Result<Info> {
+    get_info_with_timeout(http, receiver, HTTP_TIMEOUT)
+}
+
+fn get_info_with_timeout(
+    http: &reqwest::blocking::Client,
+    receiver: &Receiver,
+    timeout: Duration,
+) -> Result<Info> {
     let response = http
         .get(receiver.url("?action=getInfo"))
-        .timeout(HTTP_TIMEOUT)
+        .timeout(timeout)
         .send()
         .context("receiver did not answer")?;
     if !response.status().is_success() {
         bail!("receiver answered {}", response.status());
     }
     response.json().context("receiver sent an unreadable reply")
+}
+
+/// Resolve advertisements before offering them as playback targets. This
+/// only reads device information; account credentials are sent on selection.
+/// Four probes run at a time, with two seconds per probe and six overall.
+pub fn resolve_receivers(receivers: Vec<Receiver>) -> Result<Vec<Receiver>> {
+    let http = reqwest::blocking::Client::builder().build()?;
+    let pending = std::sync::Mutex::new(receivers.into_iter());
+    let found = std::sync::Mutex::new(HashMap::new());
+    let deadline = std::time::Instant::now() + Duration::from_secs(6);
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                while let Some(remaining) =
+                    deadline.checked_duration_since(std::time::Instant::now())
+                {
+                    let Some(mut receiver) =
+                        pending.lock().unwrap_or_else(|p| p.into_inner()).next()
+                    else {
+                        break;
+                    };
+                    let Ok(info) = get_info_with_timeout(
+                        &http,
+                        &receiver,
+                        remaining.min(Duration::from_secs(2)),
+                    ) else {
+                        continue;
+                    };
+                    if info.device_id.trim().is_empty() || info.remote_name.trim().is_empty() {
+                        continue;
+                    }
+                    receiver.name = info.remote_name;
+                    receiver.device_id = Some(info.device_id.clone());
+                    found
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .entry(info.device_id)
+                        .or_insert(receiver);
+                }
+            });
+        }
+    });
+    let mut receivers: Vec<_> = found
+        .into_inner()
+        .unwrap_or_else(|p| p.into_inner())
+        .into_values()
+        .collect();
+    receivers.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(receivers)
 }
 
 /// Hands an account to a receiver so it logs in and joins Spotify Connect.
@@ -376,6 +428,24 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn receiver_handoff_uses_the_in_memory_playback_grant() {
+        let stored = librespot_core::authentication::Credentials {
+            username: Some("dummy-account".into()),
+            auth_type: librespot_protocol::authentication::AuthenticationType::AUTHENTICATION_STORED_SPOTIFY_CREDENTIALS,
+            auth_data: b"dummy-reusable-grant".to_vec(),
+        };
+        let handoff = super::Credentials::from_playback(&stored).unwrap();
+        assert_eq!(handoff.username, "dummy-account");
+        assert_eq!(handoff.auth_data, b"dummy-reusable-grant");
+        assert!(
+            super::Credentials::from_playback(
+                &librespot_core::authentication::Credentials::with_access_token("dummy-token")
+            )
+            .is_err()
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -422,6 +492,7 @@ mod tests {
     fn receiver_urls_bracket_ipv6() {
         let receiver = Receiver {
             name: "House".into(),
+            device_id: None,
             address: "192.168.8.166".parse().unwrap(),
             port: 5907,
             path: "/".into(),
@@ -436,5 +507,62 @@ mod tests {
             ..receiver
         };
         assert_eq!(receiver.url(""), "http://[fe80::1]:5907/zc");
+    }
+    #[test]
+    fn discovery_uses_receiver_names_and_ids_and_omits_dead_advertisements() {
+        use std::io::{BufRead, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut line = String::new();
+                std::io::BufReader::new(&mut stream)
+                    .read_line(&mut line)
+                    .unwrap();
+                assert!(line.starts_with("GET "));
+                assert!(line.contains("action=getInfo"));
+                let (status, body) = if line.contains("/dead?") {
+                    ("503 Service Unavailable", "{}")
+                } else if line.contains("/other?") {
+                    ("200 OK", r#"{"deviceID":"two","remoteName":"Living Room"}"#)
+                } else {
+                    ("200 OK", r#"{"deviceID":"one","remoteName":"Living Room"}"#)
+                };
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let receivers = ["first", "duplicate", "other", "dead"].map(|path| Receiver {
+            name: format!("SpotifyConnect-{path}"),
+            device_id: None,
+            address: "127.0.0.1".parse().unwrap(),
+            port,
+            path: format!("/{path}"),
+        });
+        let resolved = resolve_receivers(receivers.into()).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            resolved.len(),
+            2,
+            "merge identities, not matching room names"
+        );
+        assert!(
+            resolved
+                .iter()
+                .all(|receiver| receiver.name == "Living Room")
+        );
+        assert!(
+            resolved
+                .iter()
+                .any(|receiver| receiver.device_id.as_deref() == Some("one"))
+        );
+        assert!(
+            resolved
+                .iter()
+                .any(|receiver| receiver.device_id.as_deref() == Some("two"))
+        );
     }
 }

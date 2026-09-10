@@ -1,11 +1,11 @@
 [package]
 name = "fastpotify"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 description = "A native Spotify client"
-repository = "https://github.com/crmne/fastpotify"
+repository = "https://github.com/OthinusG/fastpotify-proxy_ver"
 keywords = ["spotify", "music", "egui", "librespot", "player"]
 categories = ["multimedia::audio"]
 
@@ -26,6 +26,12 @@ serde_json = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 directories = "6"
+# A small translation trait for catalogs generated from PO files at build time.
+# No system libintl, global locale, or runtime catalog parsing is needed.
+tr = { version = "0.1.11", default-features = false }
+# One protected-store API, with only each target's native provider below.
+# Durable Spotify grants must not be copied into ordinary state JSON.
+keyring-core = "1"
 # The whole UI. glow keeps the binary and the dependency tree small; wgpu is
 # not needed for a 2D music client.
 # AccessKit connects egui's control names, states, and actions to native screen readers.
@@ -111,6 +117,7 @@ tray-icon = { version = "0.24", default-features = false }
 souvlaki = { version = "0.8", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Serving AppKit while no window exists: the status item and Dock reopen
 # callback live on the main thread.
 objc2 = "0.6"
@@ -120,10 +127,16 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = { version = "1.1", default-features = false }
 # A hidden window for the media controls to belong to, and message loops.
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The thumbnail toolbar needs eframe's native window handle even without
+# MilkDrop. This is the same crate already compiled by eframe and winit.
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Reuses the zbus/Tokio stack already used for desktop integration.
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 ksni = { version = "0.3", features = ["blocking"] }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend", "pulseaudio-backend", "rustls-tls-native-roots"] }
 mpris-server = { version = "0.10", features = ["tokio"] }
@@ -132,6 +145,16 @@ mpris-server = { version = "0.10", features = ["tokio"] }
 # launch a Spotify link makes (src/single_instance.rs). Same version, so
 # nothing new is compiled.
 zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[build-dependencies]
+# Validate/filter unfinished PO entries, then compile catalog text and gettext
+# plural expressions to Rust. Ordinary builds do not need gettext tools.
+polib = "0.3"
+include-po = "0.2"
+
+[dev-dependencies]
+# Exercise the same PO compiler used by build.rs with partial catalogs.
+polib = "0.3"
 
 # The icon and version information Windows shows for the executable.
 [target.'cfg(windows)'.build-dependencies]
@@ -174,7 +197,8 @@ hyper-proxy2 = { git = "https://github.com/siketyan/hyper-proxy2", rev = "2a1a98
 # librespot 0.8.0 plus the small patches Fastpotify needs: queue controls,
 # normalisation-factor reporting for the visualisers, and a distinct event
 # when Spotify refuses an audio key, and a connection deadline that includes
-# socket setup. Every librespot crate comes from the
+# socket setup, plus an in-memory credential cache for platform storage.
+# Every librespot crate comes from the
 # fork so one copy exists. Drop patches as upstream takes them.
 librespot-audio = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
 librespot-connect = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }

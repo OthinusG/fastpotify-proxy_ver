@@ -13,15 +13,20 @@ fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let dirs = fastpotify::paths::AppDirs::discover();
-    let cache = Cache::new(Some(dirs.credentials_dir().as_path()), None, None, None)?;
-    let credentials = cache
-        .credentials()
-        .ok_or_else(|| anyhow::anyhow!("no stored playback credential"))?;
+    let cache = Cache::new::<&std::path::Path>(None, None, None, None)?.with_memory_credentials();
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async move {
+        let store = fastpotify::credentials::Store::new(dirs);
+        let loaded = store.lease(fastpotify::credentials::Slot::Playback).load().await?;
+        if let Some(warning) = loaded.warning {
+            eprintln!("{warning}");
+        }
+        let Some(fastpotify::credentials::Grant::Playback(credentials)) = loaded.grant else {
+            anyhow::bail!("Enable playback in Fastpotify first");
+        };
         let session = Session::new(SessionConfig::default(), Some(cache));
         session.connect(credentials, false).await?;
         println!("connected as {}", session.username());

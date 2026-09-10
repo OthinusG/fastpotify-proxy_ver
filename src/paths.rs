@@ -1,9 +1,8 @@
 //! Where Fastpotify keeps its files.
 //!
-//! Configuration, durable state (Spotify credentials), and disposable caches
-//! (audio, artwork) live in the platform's conventional directories, so
-//! clearing a cache never signs the user out and a config backup never
-//! contains a credential.
+//! Configuration, durable non-secret state, and disposable caches live in the
+//! platform's conventional directories. Spotify grants use the platform store;
+//! the token paths below are retained only for migration and sign-out cleanup.
 
 use std::path::PathBuf;
 
@@ -112,6 +111,17 @@ impl AppDirs {
 
     pub fn account_playlist_cache_dir(&self, account_id: &str) -> PathBuf {
         self.playlist_cache_dir().join(account_id)
+    }
+
+    pub fn liked_songs_cache_file(&self, account_id: &str) -> PathBuf {
+        // Hex encoding also keeps unusual account IDs within the cache root.
+        let account: String = account_id
+            .bytes()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        self.cache
+            .join("liked-songs")
+            .join(format!("{account}.json"))
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {

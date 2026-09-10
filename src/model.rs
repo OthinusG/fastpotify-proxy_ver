@@ -519,6 +519,9 @@ pub struct PlaylistPage {
     /// Snapshot returned by the latest successful write. A lagging metadata
     /// read must not replace it with the snapshot from before that write.
     pub optimistic_snapshot: Option<String>,
+    /// Writes still awaiting a result. Keep their optimistic rows in memory
+    /// even when navigation moves beyond the usual page-cache limit.
+    pub pending_writes: usize,
     /// Number of immediate metadata reads made while Spotify still reported
     /// the pre-write snapshot.
     pub snapshot_rechecks: u8,
@@ -639,6 +642,14 @@ pub struct DragTrack {
     pub from: Option<(String, u32)>,
 }
 
+/// Where the playing songs come from, as the queue's header names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayingFrom {
+    pub name: String,
+    /// The page that opens on click. A song radio has none.
+    pub page: Option<Page>,
+}
+
 /// Sidebar entry held during a drag.
 #[derive(Clone, Debug)]
 pub struct DragEntry {
@@ -669,11 +680,14 @@ pub enum Dialog {
         playlist_id: String,
         playlist_name: String,
         items: Vec<PlayableItem>,
+        position: Option<u32>,
         duplicate_uris: Vec<String>,
     },
     Shortcuts,
     /// The signed-in account is not Premium, so nothing will play.
     PremiumNeeded,
+    /// Introduce personal Spotify apps to eligible listeners once.
+    PersonalAppIntro,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -749,10 +763,17 @@ pub enum Action {
         playlist_name: String,
         items: Vec<PlayableItem>,
     },
+    /// Copy a dragged song into an open playlist at an absolute position.
+    InsertInPlaylist {
+        playlist_id: String,
+        position: u32,
+        item: Box<PlayableItem>,
+    },
     ConfirmAddToPlaylist {
         playlist_id: String,
         playlist_name: String,
         items: Vec<PlayableItem>,
+        position: Option<u32>,
     },
     RemoveFromPlaylist {
         playlist_id: String,
@@ -813,6 +834,7 @@ pub enum Action {
     SignOut,
     /// Add, replace, or remove the optional personal Web API app.
     ConfigurePersonalWebApp,
+    OpenPersonalAppSetup,
     ToggleSidebar,
     ToggleQueuePanel,
     ToggleLyricsPanel,
@@ -820,6 +842,15 @@ pub enum Action {
     /// Ask GitHub for the latest release and report the result to the user.
     CheckForUpdates,
     SettingsChanged,
+    SetLibrarySort {
+        shelf: crate::settings::LibraryShelf,
+        sort: crate::settings::LibrarySort,
+    },
+    ArrangeLibrary {
+        pinned: Vec<String>,
+        /// A drag outside the pin block selects this local playlist order.
+        playlist_order: Option<Vec<String>>,
+    },
     RestartEngine,
     EnablePlayback,
     ShowWindow,
@@ -836,6 +867,7 @@ pub enum Action {
     /// Screen pixels per skin pixel in the Winamp window.
     SetSkinScale(u8),
     ToggleWinampOnTop,
+    SetWinampTaskbar(bool),
     OpenSkinsFolder,
     /// Cycle bars, scope, and off.
     CycleVisualiser,

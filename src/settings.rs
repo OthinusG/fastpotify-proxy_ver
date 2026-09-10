@@ -4,6 +4,40 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// Local Library identity only. Never sent to Spotify as a context URI.
+pub const LIKED_SONGS_KEY: &str = "fastpotify:liked-songs";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LibraryShelf {
+    #[default]
+    Playlists,
+    Albums,
+    Artists,
+    Podcasts,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibrarySort {
+    Library,
+    RecentlyPlayed,
+    Name,
+    RecentlyAdded,
+    Local,
+    Spotify,
+}
+
+impl LibrarySort {
+    pub fn supports(self, shelf: LibraryShelf) -> bool {
+        match self {
+            Self::RecentlyPlayed | Self::Name | Self::Library => true,
+            Self::RecentlyAdded => matches!(shelf, LibraryShelf::Albums | LibraryShelf::Podcasts),
+            Self::Local | Self::Spotify => shelf == LibraryShelf::Playlists,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
@@ -91,8 +125,10 @@ pub struct Settings {
     /// An optional personal Spotify Web API application id. The shared
     /// application remains active for coverage when this is present.
     pub web_client_id: Option<String>,
-    /// When the slow-Spotify personal-app reminder was last shown.
+    /// Legacy reminder time, retained for older Fastpotify versions.
     pub personal_app_nudge_at: Option<String>,
+    /// The listener has dismissed or followed the personal-app introduction.
+    pub personal_app_intro_seen: bool,
     /// Local playback has been authorized at least once on this machine, so
     /// the app can resume it silently instead of prompting.
     pub playback_authorized: bool,
@@ -100,15 +136,22 @@ pub struct Settings {
     pub keep_playing_in_background: bool,
     /// Ask GitHub once a day whether a newer release exists.
     pub check_for_updates: bool,
-    /// Context URIs pinned to the top of the sidebar, in pin order.
+    /// Context URIs and the local Liked Songs key, in pin order.
     pub pinned_contexts: Vec<String>,
-    /// The sidebar's own playlist order, set by dragging rows. Empty means
-    /// the automatic order: the pinned block first, then recently played.
+    /// Older settings keep Liked Songs first until it is moved or unpinned.
+    pub liked_songs_pinned: bool,
+    /// The sidebar's own playlist order, set by dragging rows. Kept while
+    /// another sort is selected; empty means no saved local arrangement.
     pub sidebar_order: Vec<String>,
+    /// Explicit order per Library shelf. Missing shelves keep their previous
+    /// behaviour; selecting another order never deletes the local arrangement.
+    pub library_sort: std::collections::BTreeMap<LibraryShelf, LibrarySort>,
     /// Interface zoom, egui's zoom factor; Ctrl+plus/minus changes it.
     pub zoom: f32,
     /// The Winamp window is open.
     pub winamp_window: bool,
+    /// Windows: keep a taskbar button while the Winamp window is visible.
+    pub winamp_show_taskbar: bool,
     /// Skin file or folder name. `None` selects the built-in skin.
     pub skin: Option<String>,
     /// Screen pixels per skin pixel; `None` picks double size for the
@@ -186,13 +229,17 @@ impl Default for Settings {
             show_shortcut_hints: true,
             web_client_id: None,
             personal_app_nudge_at: None,
+            personal_app_intro_seen: false,
             playback_authorized: false,
             keep_playing_in_background: true,
             check_for_updates: true,
             pinned_contexts: Vec::new(),
+            liked_songs_pinned: true,
             sidebar_order: Vec::new(),
+            library_sort: std::collections::BTreeMap::new(),
             zoom: 1.0,
             winamp_window: false,
+            winamp_show_taskbar: true,
             skin: None,
             skin_scale: None,
             winamp_on_top: false,
@@ -224,6 +271,16 @@ fn default_buffer_ms() -> u32 {
 }
 
 impl Settings {
+    pub fn library_pins(&self) -> Vec<String> {
+        let mut pins = self.pinned_contexts.clone();
+        if !self.liked_songs_pinned {
+            pins.retain(|key| key != LIKED_SONGS_KEY);
+        } else if !pins.iter().any(|key| key == LIKED_SONGS_KEY) {
+            pins.insert(0, LIKED_SONGS_KEY.into());
+        }
+        pins
+    }
+
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
@@ -361,9 +418,23 @@ mod tests {
     }
 
     #[test]
+    fn older_library_settings_keep_liked_songs_ahead_of_existing_pins() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"pinned_contexts":["spotify:playlist:one"],"sidebar_order":["spotify:playlist:two"]}"#,
+        ).unwrap();
+        assert!(settings.liked_songs_pinned);
+        assert_eq!(
+            settings.library_pins(),
+            [super::LIKED_SONGS_KEY, "spotify:playlist:one"]
+        );
+        assert_eq!(settings.sidebar_order, ["spotify:playlist:two"]);
+    }
+
+    #[test]
     fn older_settings_keep_the_winamp_window_closed_and_the_built_in_skin() {
         let settings: Settings = serde_json::from_str(r#"{"zoom": 1.2}"#).unwrap();
         assert!(!settings.winamp_window);
+        assert!(settings.winamp_show_taskbar);
         assert_eq!(settings.skin, None);
         assert_eq!(settings.skin_scale, None);
         assert!(!settings.winamp_on_top);
@@ -451,9 +522,11 @@ mod tests {
     fn personal_app_nudge_time_is_backward_compatible_and_round_trips() {
         let older: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(older.personal_app_nudge_at, None);
+        assert!(!older.personal_app_intro_seen);
 
         let settings = Settings {
             personal_app_nudge_at: Some("2026-09-03T15:00:00Z".into()),
+            personal_app_intro_seen: true,
             ..Settings::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -462,6 +535,7 @@ mod tests {
             restored.personal_app_nudge_at,
             settings.personal_app_nudge_at
         );
+        assert!(restored.personal_app_intro_seen);
     }
 }
 

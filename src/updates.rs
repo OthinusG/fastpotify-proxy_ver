@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/crmne/fastpotify/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/OthinusG/fastpotify-proxy_ver/releases/latest";
 
 /// Update-check interval.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);

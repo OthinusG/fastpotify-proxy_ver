@@ -6,15 +6,27 @@ nav_order: 6
 
 ## API rate limits
 
-Fastpotify loads library and catalogue data through Spotify's Web API, which
-is rate-limited per *app*. By default, Fastpotify shares a public app with
-several other open-source players. When that app reaches its limit, requests
-are delayed and the top bar shows a spinner. If Web API work stays busy for
-five seconds and no personal app is configured, Fastpotify reminds you to set
-one up in Settings at most once every 24 hours.
+Fastpotify loads library and catalogue data through Spotify's Web API. By
+default, it shares a public app with several other open-source players. When
+that app reaches Spotify's request limit, requests are delayed and the top bar
+shows a spinner.
+
+On `main`, for the release after 0.7.1, Premium listeners using shared access
+see a one-time introduction to personal apps after their account is verified.
+**Set up personal app** opens Settings at the Client ID field, beside the
+setup guide. **Keep shared app**, Escape, or clicking outside the prompt
+dismisses it. That choice is remembered across restarts; setup remains
+available in Settings. The prompt waits while another dialog is open and does
+not appear in the Winamp window. This replaces the brief daily reminder shown
+after five seconds of busy requests in older releases.
 
 A personal app gives supported requests a separate Development Mode quota.
 Creating one is free and takes a few minutes.
+All Development Mode apps owned by your Spotify developer account share that
+account's allowance, following Spotify's
+[July 2026 quota update](https://developer.spotify.com/blog/2026-07-23-web-api-quota-updates).
+This can reduce delays from the shared app; some requests still need shared
+access, and a personal app has its own limits.
 
 ## Shared coverage stays active
 

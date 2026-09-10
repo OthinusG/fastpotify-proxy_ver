@@ -11,6 +11,7 @@ use crate::theme::{self, Icon, Palette};
 use super::widgets;
 
 const PLAYBACK_DIRTY_ID: &str = "playback-settings-dirty";
+pub(crate) const PERSONAL_APP_FOCUS_ID: &str = "focus-personal-app-setup";
 
 fn section(
     ui: &mut egui::Ui,
@@ -106,6 +107,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut client_id)
+                                .id(egui::Id::new("personal-web-client-id"))
                                 .hint_text(egui::RichText::new("Client ID").color(palette.dim))
                                 .font(theme::regular(13.0))
                                 .frame(egui::Frame::NONE)
@@ -113,6 +115,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         )
                     })
                     .inner;
+                if ui
+                    .data_mut(|data| data.remove_temp::<bool>(egui::Id::new(PERSONAL_APP_FOCUS_ID)))
+                    .unwrap_or(false)
+                {
+                    response.scroll_to_me(Some(Align::Center));
+                    response.request_focus();
+                }
                 if response.changed() {
                     let trimmed = client_id.trim().to_string();
                     app.settings.web_client_id = (!trimmed.is_empty()).then_some(trimmed);
@@ -683,6 +692,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             },
         );
+        if app.windows_controls_visible() {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Show in taskbar",
+                "Keep a taskbar button for the mini player. The tray icon stays available when hidden.",
+                |ui| {
+                    let mut visible = app.settings.winamp_show_taskbar;
+                    let response =
+                        widgets::switch(ui, &palette, "Show Winamp in taskbar", &mut visible);
+                    if response.changed() {
+                        app.actions.push(Action::SetWinampTaskbar(visible));
+                    }
+                    #[cfg(any(test, feature = "demo"))]
+                    if app.demo_windows_controls {
+                        let id = egui::Id::new("demo-winamp-taskbar-focus");
+                        if !ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
+                            response.scroll_to_me(Some(Align::Center));
+                            ui.data_mut(|data| data.insert_temp(id, true));
+                        }
+                    }
+                },
+            );
+        }
     });
 
     section(ui, &palette, "MilkDrop", |ui| {
@@ -927,10 +960,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui,
             &palette,
             "Sign-in",
-            &format!(
-                "Credentials are kept in {}",
-                app.dirs.credentials_dir().display()
-            ),
+            "Sign-ins are saved in the system credential store when available.",
             |_| {},
         );
     });
