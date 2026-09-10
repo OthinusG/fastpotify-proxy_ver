@@ -95,8 +95,17 @@ jobs:
           git push origin HEAD:main
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+            mac="fastpotify-${tag}-macos-universal.dmg"
+            win="fastpotify-${tag}-windows-x64.zip"
+            deb="fastpotify-${tag}-linux-x64.deb"
+            if grep -Fxq "$mac" <<< "$assets" \
+              && grep -Fxq "$win" <<< "$assets" \
+              && grep -Fxq "$deb" <<< "$assets"; then
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Release $tag exists but is incomplete; rebuilding missing platform assets."
           fi
 
           if ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
