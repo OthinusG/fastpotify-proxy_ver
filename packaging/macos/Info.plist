@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Fastpotify Proxy</string>
-    <key>CFBundleDisplayName</key><string>Fastpotify Proxy</string>
+    <key>CFBundleName</key><string>Fastpotify</string>
+    <key>CFBundleDisplayName</key><string>Fastpotify</string>
     <key>CFBundleIdentifier</key><string>com.othinusg.fastpotify.proxy</string>
     <key>CFBundleExecutable</key><string>fastpotify</string>
     <key>CFBundleIconFile</key><string>fastpotify</string>
@@ -13,7 +13,7 @@
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSLocalNetworkUsageDescription</key><string>Fastpotify Proxy looks for Spotify Connect speakers on your local network.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Fastpotify looks for Spotify Connect speakers on your local network.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_spotify-connect._tcp</string>

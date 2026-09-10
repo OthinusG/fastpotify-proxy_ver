@@ -211,19 +211,19 @@ jobs:
 
           version="${{ needs.sync.outputs.tag }}"
           version="${version#v}"
-          bash packaging/macos/bundle.sh universal/fastpotify "Fastpotify Proxy.app" "$version"
-          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'Fastpotify Proxy.app/Contents/Info.plist')"
+          bash packaging/macos/bundle.sh universal/fastpotify "Fastpotify.app" "$version"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'Fastpotify.app/Contents/Info.plist')"
           if [[ "$bundle_id" != "com.othinusg.fastpotify.proxy" ]]; then
             echo "::error::Unexpected Fastpotify Proxy bundle identifier: $bundle_id"
             exit 1
           fi
 
           # Verify the binary after bundle.sh has copied and signed it.
-          verify_binary "Fastpotify Proxy.app/Contents/MacOS/fastpotify"
+          verify_binary "Fastpotify.app/Contents/MacOS/fastpotify"
 
           stage="$RUNNER_TEMP/dmg"
           mkdir -p "$stage"
-          cp -R "Fastpotify Proxy.app" "$stage/"
+          cp -R "Fastpotify.app" "$stage/"
           cp README.md LICENSE "$stage/"
           ln -s /Applications "$stage/Applications"
           dmg="dist/fastpotify-proxy-${{ needs.sync.outputs.tag }}-${{ needs.sync.outputs.short_sha }}-macos-universal.dmg"
@@ -234,8 +234,8 @@ jobs:
           mkdir -p "$mount_dir"
           hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
           trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
-          verify_binary "$mount_dir/Fastpotify Proxy.app/Contents/MacOS/fastpotify"
-          mounted_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$mount_dir/Fastpotify Proxy.app/Contents/Info.plist")"
+          verify_binary "$mount_dir/Fastpotify.app/Contents/MacOS/fastpotify"
+          mounted_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$mount_dir/Fastpotify.app/Contents/Info.plist")"
           test "$mounted_bundle_id" = "com.othinusg.fastpotify.proxy"
           hdiutil detach "$mount_dir" >/dev/null
           trap - EXIT

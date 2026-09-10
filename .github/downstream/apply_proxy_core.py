@@ -397,8 +397,8 @@ write(updates_path, updates)
 plist_path = "packaging/macos/Info.plist"
 plist = read(plist_path)
 for key, value in (
-    ("CFBundleName", "Fastpotify Proxy"),
-    ("CFBundleDisplayName", "Fastpotify Proxy"),
+    ("CFBundleName", "Fastpotify"),
+    ("CFBundleDisplayName", "Fastpotify"),
     ("CFBundleIdentifier", BUNDLE_ID),
 ):
     pattern = rf'(<key>{re.escape(key)}</key>\s*<string>)[^<]*(</string>)'
@@ -407,7 +407,7 @@ for key, value in (
         raise SystemExit(f"Info.plist {key}: structure changed")
 plist = plist.replace(
     "Fastpotify looks for Spotify Connect speakers on your local network.",
-    "Fastpotify Proxy looks for Spotify Connect speakers on your local network.",
+    "Fastpotify looks for Spotify Connect speakers on your local network.",
 )
 write(plist_path, plist)
 
@@ -477,7 +477,7 @@ required = {
     milkdrop_path: ["proxy: Option<String>", "proxy: Option<&str>", "reqwest::Proxy::all(proxy)"],
     ui_path: ["HTTP proxy server", "HTTP proxy port", "Proxy status", "Restart Fastpotify", 'env!("CARGO_PKG_REPOSITORY")'],
     updates_path: [RELEASE_API],
-    plist_path: [BUNDLE_ID, "Fastpotify Proxy"],
+    plist_path: [BUNDLE_ID, "Fastpotify"],
     single_path: [f"const INSTANCE_PORT: u16 = {INSTANCE_PORT};"],
     readme_path: ["## Proxy Configuration"],
     settings_doc: ["| `proxy_server` |", "| `proxy_port` |"],

@@ -1150,7 +1150,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 theme::text(
                     ui,
                     format!(
-                        "Fastpotify Proxy {} · {}",
+                        "Fastpotify {} · {}",
                         env!("CARGO_PKG_VERSION"),
                         env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")
                     ),

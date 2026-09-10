@@ -280,11 +280,15 @@ write(main_path, main)
 ui_path = "src/ui/settings.rs"
 ui = read(ui_path)
 old_about = '                    format!("Fastpotify {}", env!("CARGO_PKG_VERSION")),\n'
-new_about = '                    format!(\n                        "Fastpotify Proxy {} · {}",\n                        env!("CARGO_PKG_VERSION"),\n                        env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")\n                    ),\n'
+old_about_proxy = '                    format!(\n                        "Fastpotify Proxy {} · {}",\n                        env!("CARGO_PKG_VERSION"),\n                        env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")\n                    ),\n'
+new_about = '                    format!(\n                        "Fastpotify {} · {}",\n                        env!("CARGO_PKG_VERSION"),\n                        env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")\n                    ),\n'
 if new_about not in ui:
-    if old_about not in ui:
+    if old_about_proxy in ui:
+        ui = ui.replace(old_about_proxy, new_about, 1)
+    elif old_about not in ui:
         raise SystemExit("About version label anchor changed")
-    ui = ui.replace(old_about, new_about, 1)
+    else:
+        ui = ui.replace(old_about, new_about, 1)
 write(ui_path, ui)
 
 
@@ -297,7 +301,7 @@ require(
     "build_sha: ${{ steps.sync.outputs.build_sha }}",
     "ref: ${{ needs.sync.outputs.build_sha }}",
     "Verify immutable source revision",
-    'verify_binary "$mount_dir/Fastpotify Proxy.app/Contents/MacOS/fastpotify"',
+    'verify_binary "$mount_dir/Fastpotify.app/Contents/MacOS/fastpotify"',
 )
 
 require(
@@ -321,6 +325,6 @@ require(
 )
 require(app_path, "ControlCommand::QuitForUpdate => Some(Action::Quit)")
 require(main_path, "Reply::Build(_)")
-require(ui_path, '"Fastpotify Proxy {} · {}"', 'env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")')
+require(ui_path, '"Fastpotify {} · {}"', 'env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")')
 
 print("Fastpotify Proxy stale-instance handoff is repaired and verified.")
