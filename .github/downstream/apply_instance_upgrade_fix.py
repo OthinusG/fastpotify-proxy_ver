@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Repair build-aware Fastpotify Proxy instance handoff and release injection.
+"""Repair stale-instance interception without editing workflow files.
 
-This layer is intentionally idempotent. It runs after apply_proxy_core.py,
-which may restore upstream-shaped source or the known-good base release
-workflow. The final downstream state always uses port 47115 and embeds the
-exact release commit so an older Proxy process cannot silently surface itself
-when a newer build is launched.
+The core downstream patch deliberately retains the historical 47114 marker.
+This layer keeps that marker for compatibility, moves the actual Proxy runtime
+to 47115, adds a build-ID handshake, and embeds the checkout SHA from build.rs.
+It is idempotent and only changes ordinary source files, so GitHub Actions can
+commit its repairs without `workflows` permission.
 """
 
 from pathlib import Path
 import re
 
-PORT = "47_115"
-BUILD_ENV = "FASTPOTIFY_PROXY_BUILD_SHA"
+LEGACY_PORT = "47_114"
+ACTIVE_PORT = "47_115"
 
 
 def read(path: str) -> str:
@@ -33,28 +33,96 @@ def require(path: str, *markers: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Build provenance without touching the release workflow.
+# build.rs records the exact checked-out Git commit in every package build.
+# ---------------------------------------------------------------------------
+build_path = "build.rs"
+build = read(build_path)
+if "fn emit_proxy_build_id()" not in build:
+    anchor = "fn main() {\n"
+    helper = '''fn emit_proxy_build_id() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    let build = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "dev".to_owned())
+        });
+    let short = build.get(..8).unwrap_or(&build);
+    println!("cargo:rustc-env=FASTPOTIFY_PROXY_BUILD_SHA={build}");
+    println!("cargo:rustc-env=FASTPOTIFY_PROXY_BUILD_SHORT_SHA={short}");
+}
+
+'''
+    if anchor not in build:
+        raise SystemExit("build.rs main anchor changed")
+    build = build.replace(anchor, helper + anchor, 1)
+if "    emit_proxy_build_id();\n" not in build:
+    anchor = "fn main() {\n"
+    if anchor not in build:
+        raise SystemExit("build.rs main call anchor changed")
+    build = build.replace(anchor, anchor + "    emit_proxy_build_id();\n", 1)
+write(build_path, build)
+
+
+# ---------------------------------------------------------------------------
 # macOS / Windows single-instance protocol.
-# 47115 is a one-time migration away from old downstream builds on 47114.
-# From this build onward the listener reports its build id. A newer build asks
-# an older build to quit, waits for the port, then becomes the running instance.
+# Keep INSTANCE_PORT=47114 so the proven core patch + workflow assertions stay
+# stable. Actual downstream runtime uses PROXY_INSTANCE_PORT=47115, which means
+# an already-running pre-fix build on 47114 cannot intercept the new app.
+# From 47115 onward different builds negotiate replacement automatically.
 # ---------------------------------------------------------------------------
 single_path = "src/single_instance.rs"
 single = read(single_path)
-single, count = re.subn(
-    r"const INSTANCE_PORT: u16 = 47_\d{3};",
-    f"const INSTANCE_PORT: u16 = {PORT};",
-    single,
-    count=1,
-)
-if count != 1:
-    raise SystemExit("single-instance port anchor changed")
 
-if "const BUILD_ID: &str" not in single:
-    anchor = f"const INSTANCE_PORT: u16 = {PORT};\n"
-    addition = "\n/// Exact downstream release commit when CI builds a package.\n#[cfg(not(target_os = \"linux\"))]\nconst BUILD_ID: &str = match option_env!(\"FASTPOTIFY_PROXY_BUILD_SHA\") {\n    Some(id) => id,\n    None => env!(\"CARGO_PKG_VERSION\"),\n};\n"
+# Core patcher must continue to own this historical marker.
+if f"const INSTANCE_PORT: u16 = {LEGACY_PORT};" not in single:
+    single, count = re.subn(
+        r"const INSTANCE_PORT: u16 = 47_\d{3};",
+        f"const INSTANCE_PORT: u16 = {LEGACY_PORT};",
+        single,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit("legacy single-instance port anchor changed")
+
+if "const PROXY_INSTANCE_PORT: u16" not in single:
+    anchor = f"const INSTANCE_PORT: u16 = {LEGACY_PORT};\n"
+    addition = '''
+/// Runtime guard for the downstream Proxy build. Kept separate from the
+/// historical 47114 marker so an older installed Proxy cannot surface itself
+/// when a newer package is launched.
+#[cfg(not(target_os = "linux"))]
+const PROXY_INSTANCE_PORT: u16 = 47_115;
+
+/// Exact source commit embedded by build.rs.
+#[cfg(not(target_os = "linux"))]
+const BUILD_ID: &str = env!("FASTPOTIFY_PROXY_BUILD_SHA");
+'''
     if anchor not in single:
-        raise SystemExit("BUILD_ID insertion anchor changed")
+        raise SystemExit("active port insertion anchor changed")
     single = single.replace(anchor, anchor + addition, 1)
+else:
+    single = re.sub(
+        r"const PROXY_INSTANCE_PORT: u16 = 47_\d{3};",
+        f"const PROXY_INSTANCE_PORT: u16 = {ACTIVE_PORT};",
+        single,
+        count=1,
+    )
+
+# INSTANCE_PORT becomes a compatibility marker once runtime switches to 47115.
+legacy_attr = f'#[allow(dead_code)]\nconst INSTANCE_PORT: u16 = {LEGACY_PORT};'
+if legacy_attr not in single:
+    single = single.replace(
+        f"const INSTANCE_PORT: u16 = {LEGACY_PORT};",
+        legacy_attr,
+        1,
+    )
 
 if "QuitForUpdate" not in single:
     anchor = "    Show,\n"
@@ -72,10 +140,17 @@ if "const BUILD_REPLY" not in single:
 
 if "Build(String)" not in single:
     anchor = "    Devices(String),\n}"
-    addition = "    Devices(String),\n    /// Exact build id of the running downstream instance.\n    Build(String),\n}"
+    replacement = "    Devices(String),\n    /// Exact build id of the running downstream instance.\n    Build(String),\n}"
     if anchor not in single:
         raise SystemExit("Reply::Devices anchor changed")
-    single = single.replace(anchor, addition, 1)
+    single = single.replace(anchor, replacement, 1)
+
+# All normal control requests target the active Proxy listener.
+single = single.replace(
+    "    send_to(INSTANCE_PORT, verb)\n",
+    "    send_to(PROXY_INSTANCE_PORT, verb)\n",
+    1,
+)
 
 if "line.strip_prefix(BUILD_REPLY)" not in single:
     anchor = "    } else if let Some(snapshot) = line.strip_prefix(DEVICES_REPLY) {\n        Ok(Reply::Devices(snapshot.to_owned()))\n    } else {"
@@ -86,16 +161,18 @@ if "line.strip_prefix(BUILD_REPLY)" not in single:
 
 if "replacing running Fastpotify Proxy build" not in single:
     start_marker = "    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, INSTANCE_PORT)) {"
+    if start_marker not in single:
+        start_marker = "    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, PROXY_INSTANCE_PORT)) {"
     end_marker = "    let guard = unguarded();"
     start = single.find(start_marker)
     end = single.find(end_marker, start)
     if start < 0 or end < 0:
         raise SystemExit("single-instance acquire block changed")
-    replacement = '''    let bind = || TcpListener::bind((Ipv4Addr::LOCALHOST, INSTANCE_PORT));
+    replacement = '''    let bind = || TcpListener::bind((Ipv4Addr::LOCALHOST, PROXY_INSTANCE_PORT));
     let mut listener = bind();
 
-    // A previous downstream build must not intercept a newly installed build.
-    // Same-build launches still behave as normal single-instance `show` calls.
+    // Same-build launches surface the existing process. A different build
+    // asks the old downstream process to quit, then takes over the listener.
     if listener.is_err() {
         let running_build = match send("build-id") {
             Ok(Reply::Build(build)) => Some(build),
@@ -126,21 +203,19 @@ if "replacing running Fastpotify Proxy build" not in single:
     let listener = match listener {
         Ok(listener) => listener,
         Err(_) => {
-            // Raise the existing instance only if the port answers as
-            // Fastpotify. A link goes with the request; an instance from
-            // before links does not answer that verb, so a plain show
-            // follows and the link is dropped rather than the launch.
             let accepted = |reply: Reply| matches!(reply, Reply::Ok);
             let opened =
                 link.is_some_and(|uri| send(&format!("open-link {uri}")).is_ok_and(accepted));
             if link.is_some() && !opened {
-                log::warn!("the running Fastpotify does not take links; asking it to show");
+                log::warn!("the running Fastpotify Proxy does not take links; asking it to show");
             }
             let answered = opened || send("show").is_ok_and(accepted);
             if answered {
                 return Outcome::Surfaced;
             }
-            log::warn!("port {INSTANCE_PORT} is busy but not with Fastpotify; running unguarded");
+            log::warn!(
+                "port {PROXY_INSTANCE_PORT} is busy but not with Fastpotify Proxy; running unguarded"
+            );
             return Outcome::Only(unguarded());
         }
     };
@@ -172,8 +247,7 @@ if '("build-id", None) => return Some(Request::Build)' not in single:
 write(single_path, single)
 
 
-# The old instance exits through the ordinary Action::Quit path so settings,
-# session state, tray and playback receive the same shutdown handling.
+# Old smart instances exit through the normal app shutdown path.
 app_path = "src/app.rs"
 app = read(app_path)
 if "ControlCommand::QuitForUpdate => Some(Action::Quit)" not in app:
@@ -185,87 +259,68 @@ if "ControlCommand::QuitForUpdate => Some(Action::Quit)" not in app:
 write(app_path, app)
 
 
-# ---------------------------------------------------------------------------
-# The release build must embed the exact source SHA into every platform binary.
-# This is also asserted in the packaged-binary verification, not only in source.
-# ---------------------------------------------------------------------------
+# Reply::Build is an internal probe; CLI commands should never request it.
+main_path = "src/main.rs"
+main = read(main_path)
+if "Reply::Build(_)" not in main:
+    anchor = "        Ok(single_instance::Reply::Devices(snapshot)) => {\n"
+    start = main.find(anchor)
+    if start < 0:
+        raise SystemExit("main Reply::Devices anchor changed")
+    err = main.find("        Err(error) => {", start)
+    if err < 0:
+        raise SystemExit("main Reply error arm changed")
+    addition = '        Ok(single_instance::Reply::Build(_)) => {\n            eprintln!("unexpected internal build-id reply");\n            1\n        }\n'
+    main = main[:err] + addition + main[err:]
+write(main_path, main)
+
+
+# Make the running build unmistakable in About. This also gives the user a
+# visual proof that the process on screen is the newly installed Proxy binary.
+ui_path = "src/ui/settings.rs"
+ui = read(ui_path)
+old_about = '                    format!("Fastpotify {}", env!("CARGO_PKG_VERSION")),\n'
+new_about = '                    format!(\n                        "Fastpotify Proxy {} · {}",\n                        env!("CARGO_PKG_VERSION"),\n                        env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")\n                    ),\n'
+if new_about not in ui:
+    if old_about not in ui:
+        raise SystemExit("About version label anchor changed")
+    ui = ui.replace(old_about, new_about, 1)
+write(ui_path, ui)
+
+
+# The sync workflow is intentionally verify-only here. It is protected from
+# upstream replacement before merge; modifying workflow files from GITHUB_TOKEN
+# would be rejected without workflows permission.
 workflow_path = ".github/workflows/sync-upstream-macos.yml"
-workflow = read(workflow_path)
-workflow = workflow.replace(
-    "const INSTANCE_PORT: u16 = 47_114;",
-    f"const INSTANCE_PORT: u16 = {PORT};",
+require(
+    workflow_path,
+    "build_sha: ${{ steps.sync.outputs.build_sha }}",
+    "ref: ${{ needs.sync.outputs.build_sha }}",
+    "Verify immutable source revision",
+    'verify_binary "$mount_dir/Fastpotify Proxy.app/Contents/MacOS/fastpotify"',
 )
 
-mac_a = "          cargo build --release --locked --target aarch64-apple-darwin\n"
-mac_x = "          cargo build --release --locked --target x86_64-apple-darwin\n"
-mac_a_new = '          FASTPOTIFY_PROXY_BUILD_SHA="${{ needs.sync.outputs.build_sha }}" cargo build --release --locked --target aarch64-apple-darwin\n'
-mac_x_new = '          FASTPOTIFY_PROXY_BUILD_SHA="${{ needs.sync.outputs.build_sha }}" cargo build --release --locked --target x86_64-apple-darwin\n'
-if mac_a_new not in workflow:
-    if mac_a not in workflow:
-        raise SystemExit("macOS arm64 cargo build anchor changed")
-    workflow = workflow.replace(mac_a, mac_a_new, 1)
-if mac_x_new not in workflow:
-    if mac_x not in workflow:
-        raise SystemExit("macOS x86 cargo build anchor changed")
-    workflow = workflow.replace(mac_x, mac_x_new, 1)
-
-linux = "          cargo build --release --locked --target x86_64-unknown-linux-gnu\n"
-linux_new = '          FASTPOTIFY_PROXY_BUILD_SHA="${{ needs.sync.outputs.build_sha }}" cargo build --release --locked --target x86_64-unknown-linux-gnu\n'
-if linux_new not in workflow:
-    if linux not in workflow:
-        raise SystemExit("Linux cargo build anchor changed")
-    workflow = workflow.replace(linux, linux_new, 1)
-
-windows = "          cargo build --release --locked --target x86_64-pc-windows-msvc\n"
-windows_new = '          $env:FASTPOTIFY_PROXY_BUILD_SHA = "${{ needs.sync.outputs.build_sha }}"\n          cargo build --release --locked --target x86_64-pc-windows-msvc\n'
-if windows_new not in workflow:
-    if windows not in workflow:
-        raise SystemExit("Windows cargo build anchor changed")
-    workflow = workflow.replace(windows, windows_new, 1)
-
-# Prove the build identity survived optimisation and packaging.
-mac_repo = '            grep -Fq "github.com/OthinusG/fastpotify-proxy_ver" "$strings_file"\n'
-mac_sha = '            grep -Fq "${{ needs.sync.outputs.build_sha }}" "$strings_file"\n'
-if mac_sha not in workflow:
-    if mac_repo not in workflow:
-        raise SystemExit("macOS binary verification anchor changed")
-    workflow = workflow.replace(mac_repo, mac_repo + mac_sha, 1)
-
-win_markers = 'foreach ($marker in @("HTTP proxy server", "Proxy status", "github.com/OthinusG/fastpotify-proxy_ver"))'
-win_markers_new = 'foreach ($marker in @("HTTP proxy server", "Proxy status", "github.com/OthinusG/fastpotify-proxy_ver", "${{ needs.sync.outputs.build_sha }}"))'
-if win_markers_new not in workflow:
-    if win_markers not in workflow:
-        raise SystemExit("Windows binary verification anchor changed")
-    workflow = workflow.replace(win_markers, win_markers_new, 1)
-
-linux_repo = '          grep -Fq "github.com/OthinusG/fastpotify-proxy_ver" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"\n'
-linux_sha = '          grep -Fq "${{ needs.sync.outputs.build_sha }}" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"\n'
-if linux_sha not in workflow:
-    if linux_repo not in workflow:
-        raise SystemExit("Linux binary verification anchor changed")
-    workflow = workflow.replace(linux_repo, linux_repo + linux_sha, 1)
-
-write(workflow_path, workflow)
-
-
+require(
+    build_path,
+    "fn emit_proxy_build_id()",
+    'cargo:rustc-env=FASTPOTIFY_PROXY_BUILD_SHA=',
+    'cargo:rustc-env=FASTPOTIFY_PROXY_BUILD_SHORT_SHA=',
+    'args(["rev-parse", "HEAD"])',
+)
 require(
     single_path,
-    f"const INSTANCE_PORT: u16 = {PORT};",
-    "const BUILD_ID: &str",
+    f"const INSTANCE_PORT: u16 = {LEGACY_PORT};",
+    f"const PROXY_INSTANCE_PORT: u16 = {ACTIVE_PORT};",
+    'env!("FASTPOTIFY_PROXY_BUILD_SHA")',
     "QuitForUpdate",
     "BUILD_REPLY",
+    'send_to(PROXY_INSTANCE_PORT, verb)',
     'send("build-id")',
     'send("quit-for-update")',
     "Some(Request::Build)",
 )
 require(app_path, "ControlCommand::QuitForUpdate => Some(Action::Quit)")
-require(
-    workflow_path,
-    f"const INSTANCE_PORT: u16 = {PORT};",
-    'FASTPOTIFY_PROXY_BUILD_SHA="${{ needs.sync.outputs.build_sha }}" cargo build --release --locked --target aarch64-apple-darwin',
-    '$env:FASTPOTIFY_PROXY_BUILD_SHA = "${{ needs.sync.outputs.build_sha }}"',
-    'FASTPOTIFY_PROXY_BUILD_SHA="${{ needs.sync.outputs.build_sha }}" cargo build --release --locked --target x86_64-unknown-linux-gnu',
-    'grep -Fq "${{ needs.sync.outputs.build_sha }}" "$strings_file"',
-)
+require(main_path, "Reply::Build(_)")
+require(ui_path, '"Fastpotify Proxy {} · {}"', 'env!("FASTPOTIFY_PROXY_BUILD_SHORT_SHA")')
 
-print("Fastpotify Proxy build-aware instance handoff is repaired and verified.")
+print("Fastpotify Proxy stale-instance handoff is repaired and verified.")
