@@ -10,7 +10,7 @@ Configuration file locations:
 | Linux    | `~/.config/fastpotify/settings.json`                                |
 | Windows  | `%APPDATA%\paolino\fastpotify\config\settings.json`                 |
 
-`proxy_server` should contain only the hostname or IP address, without `http://` or the port. Restart Fastpotify after editing the file.
+`proxy_server` should contain only the hostname or IP address, without `http://` or the port. Restart Fastpotify after editing the file. Like: { "proxy_server": "127.0.0.1", "proxy_port": 1080 } 
 
 **Spotify, native and fast.** Fastpotify is a Spotify client written in
 Rust with [egui](https://github.com/emilk/egui). It plays music through
