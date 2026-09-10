@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 description = "A native Spotify client"
-repository = "https://github.com/OthinusG/fastpotify-proxy_ver"
+repository = "https://github.com/crmne/fastpotify"
 keywords = ["spotify", "music", "egui", "librespot", "player"]
 categories = ["multimedia::audio"]
 
@@ -16,25 +16,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "fastpotify"
 path = "src/main.rs"
-
-[dependencies]
-anyhow = "1"
-thiserror = "2"
-clap = { version = "4.5", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-log = "0.4"
-env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
-directories = "6"
-# The whole UI. glow keeps the binary and the dependency tree small; wgpu is
-# not needed for a 2D music client.
-# AccessKit connects egui's control names, states, and actions to native screen readers.
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
-egui = "0.36"
-egui_extras = { version = "0.36", features = ["image", "svg"] }
-# Reading what a system font covers, so the app can borrow a face for a script
-# Inter cannot draw. skrifa is the parser epaint already rasterizes with, and
-# the version has to track epaint's or the binary compiles two copies of it;
-# memmap2 keeps the probe to the few pages of each font that answer the
-# question.
-skrifa = "0.44"
