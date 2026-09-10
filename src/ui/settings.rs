@@ -548,6 +548,115 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
     });
 
+    section(ui, &palette, "Appearance", |ui| {
+        widgets::setting_row(ui, &palette, "Theme", "", |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for choice in ThemeChoice::ALL {
+                    if theme::soft_button(
+                        ui,
+                        &palette,
+                        None,
+                        choice.label(),
+                        app.settings.theme == choice,
+                    )
+                    .clicked()
+                        && app.settings.theme != choice
+                    {
+                        app.settings.theme = choice;
+                        changed = true;
+                    }
+                }
+            });
+        });
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Colour from album art",
+            "Use the current cover's colour on pages and the player bar.",
+            |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    "Colour from album art",
+                    &mut app.settings.accent_from_art,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Compact library sidebar",
+            "Show names without covers in the sidebar.",
+            |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    "Compact library sidebar",
+                    &mut app.settings.sidebar_compact,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Compact track list",
+            "Show each track on one line without a cover.",
+            |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    "Compact track list",
+                    &mut app.settings.tracklist_compact,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Interface zoom",
+            super::keys::platform_shortcut(
+                "Ctrl+Plus and Ctrl+Minus work anywhere; Ctrl+0 resets.",
+                "Cmd+Plus and Cmd+Minus work anywhere; Cmd+0 resets.",
+            ),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let mut zoom = app.settings.zoom;
+                    if theme::soft_button(ui, &palette, None, "+", false).clicked() {
+                        zoom = (zoom + 0.1).min(2.5);
+                    }
+                    theme::text(
+                        ui,
+                        format!("{:.0}%", zoom * 100.0),
+                        theme::medium(13.5),
+                        palette.text,
+                    );
+                    if theme::soft_button(ui, &palette, None, "-", false).clicked() {
+                        zoom = (zoom - 0.1).max(0.5);
+                    }
+                    if (zoom - app.settings.zoom).abs() > 0.001 {
+                        app.settings.zoom = zoom;
+                        ui.ctx().set_zoom_factor(zoom);
+                        app.mark_settings_dirty();
+                    }
+                });
+            },
+        );
+    });
+
     section(ui, &palette, "Proxy", |ui| {
         let restart_error_id = egui::Id::new(PROXY_RESTART_ERROR_ID);
         let mut proxy_server = app.settings.proxy_server.clone().unwrap_or_default();
@@ -659,115 +768,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if let Some(error) = ui.data(|data| data.get_temp::<String>(restart_error_id)) {
             theme::subtle(ui, &palette, &error);
         }
-    });
-
-    section(ui, &palette, "Appearance", |ui| {
-        widgets::setting_row(ui, &palette, "Theme", "", |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for choice in ThemeChoice::ALL {
-                    if theme::soft_button(
-                        ui,
-                        &palette,
-                        None,
-                        choice.label(),
-                        app.settings.theme == choice,
-                    )
-                    .clicked()
-                        && app.settings.theme != choice
-                    {
-                        app.settings.theme = choice;
-                        changed = true;
-                    }
-                }
-            });
-        });
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Colour from album art",
-            "Use the current cover's colour on pages and the player bar.",
-            |ui| {
-                if widgets::switch(
-                    ui,
-                    &palette,
-                    "Colour from album art",
-                    &mut app.settings.accent_from_art,
-                )
-                .changed()
-                {
-                    changed = true;
-                }
-            },
-        );
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Compact library sidebar",
-            "Show names without covers in the sidebar.",
-            |ui| {
-                if widgets::switch(
-                    ui,
-                    &palette,
-                    "Compact library sidebar",
-                    &mut app.settings.sidebar_compact,
-                )
-                .changed()
-                {
-                    changed = true;
-                }
-            },
-        );
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Compact track list",
-            "Show each track on one line without a cover.",
-            |ui| {
-                if widgets::switch(
-                    ui,
-                    &palette,
-                    "Compact track list",
-                    &mut app.settings.tracklist_compact,
-                )
-                .changed()
-                {
-                    changed = true;
-                }
-            },
-        );
-        widgets::setting_row(
-            ui,
-            &palette,
-            "Interface zoom",
-            super::keys::platform_shortcut(
-                "Ctrl+Plus and Ctrl+Minus work anywhere; Ctrl+0 resets.",
-                "Cmd+Plus and Cmd+Minus work anywhere; Cmd+0 resets.",
-            ),
-            |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let mut zoom = app.settings.zoom;
-                    if theme::soft_button(ui, &palette, None, "+", false).clicked() {
-                        zoom = (zoom + 0.1).min(2.5);
-                    }
-                    theme::text(
-                        ui,
-                        format!("{:.0}%", zoom * 100.0),
-                        theme::medium(13.5),
-                        palette.text,
-                    );
-                    if theme::soft_button(ui, &palette, None, "-", false).clicked() {
-                        zoom = (zoom - 0.1).max(0.5);
-                    }
-                    if (zoom - app.settings.zoom).abs() > 0.001 {
-                        app.settings.zoom = zoom;
-                        ui.ctx().set_zoom_factor(zoom);
-                        app.mark_settings_dirty();
-                    }
-                });
-            },
-        );
     });
 
     section(ui, &palette, "Winamp skins", |ui| {
