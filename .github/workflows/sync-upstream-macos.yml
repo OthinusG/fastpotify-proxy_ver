@@ -29,7 +29,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Merge upstream main
+      - name: Merge upstream and reapply downstream customizations
         id: sync
         shell: bash
         env:
@@ -74,6 +74,7 @@ jobs:
               git add flake.nix
             fi
 
+            # Never let upstream replace the fork's CI/release automation.
             git restore --source=HEAD --staged --worktree -- .github/workflows
 
             if git diff --name-only --diff-filter=U | grep -q .; then
@@ -85,46 +86,13 @@ jobs:
             git commit --no-edit
           fi
 
-          # Keep the downstream Proxy controls in a predictable place even if
-          # upstream edits the surrounding Settings page.
-          python3 - <<'PY'
-          from pathlib import Path
+          # Every fork-specific modification is re-applied and verified after
+          # the upstream merge, before anything is tagged or built.
+          python3 .github/downstream/apply_proxy_customizations.py
 
-          path = Path("src/ui/settings.rs")
-          text = path.read_text()
-          proxy = '    section(ui, &palette, "Proxy", |ui| {'
-          appearance = '    section(ui, &palette, "Appearance", |ui| {'
-          winamp = '    section(ui, &palette, "Winamp skins", |ui| {'
-
-          try:
-              proxy_start = text.index(proxy)
-              appearance_start = text.index(appearance)
-              winamp_start = text.index(winamp)
-          except ValueError as error:
-              raise SystemExit(f"expected Settings section marker missing: {error}")
-
-          if not (appearance_start < proxy_start < winamp_start):
-              # Proxy currently ends where Appearance starts in the downstream
-              # layout. Extract that complete section, then insert it directly
-              # before Winamp skins (i.e. immediately after Appearance).
-              if proxy_start < appearance_start:
-                  proxy_end = appearance_start
-              else:
-                  next_sections = [p for p in (appearance_start, winamp_start) if p > proxy_start]
-                  if not next_sections:
-                      raise SystemExit("unable to locate the end of the Proxy settings section")
-                  proxy_end = min(next_sections)
-
-              proxy_block = text[proxy_start:proxy_end]
-              text = text[:proxy_start] + text[proxy_end:]
-              winamp_start = text.index(winamp)
-              text = text[:winamp_start] + proxy_block + text[winamp_start:]
-              path.write_text(text)
-          PY
-
-          if ! git diff --quiet -- src/ui/settings.rs; then
-            git add src/ui/settings.rs
-            git commit -m "Place Proxy settings after Appearance"
+          if ! git diff --quiet; then
+            git add Cargo.toml src/updates.rs packaging/macos/Info.plist src/ui/settings.rs
+            git commit -m "Reapply Fastpotify Proxy downstream customizations"
           fi
 
           version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
@@ -210,8 +178,9 @@ jobs:
 
           strings universal/fastpotify > "$RUNNER_TEMP/fastpotify-proxy-strings.txt"
           if ! grep -Fq "HTTP proxy server" "$RUNNER_TEMP/fastpotify-proxy-strings.txt" \
-            || ! grep -Fq "Proxy status" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"; then
-            echo "::error::Built macOS binary is missing the Proxy settings GUI markers."
+            || ! grep -Fq "Proxy status" "$RUNNER_TEMP/fastpotify-proxy-strings.txt" \
+            || ! grep -Fq "github.com/OthinusG/fastpotify-proxy_ver" "$RUNNER_TEMP/fastpotify-proxy-strings.txt"; then
+            echo "::error::Built macOS binary is missing required Fastpotify Proxy markers."
             exit 1
           fi
 
