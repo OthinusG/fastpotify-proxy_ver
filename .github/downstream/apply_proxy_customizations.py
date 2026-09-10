@@ -17,6 +17,9 @@ INSTANCE_PORT = "47_114"
 # this repository's history and is used only as a source of small fragments.
 CANONICAL = "cb69210893ecb16ee993fbdea64908409a0c8c11"
 README_CANONICAL = "8d2a86c3d7b448e79e637041fe4577155aad2de3"
+# Known-good release pipeline that builds the exact post-patch commit, gives
+# every asset an immutable source suffix, and verifies the packaged binary.
+RELEASE_CANONICAL = "fdbb57d454315a56c345301af066814b151a78b0"
 
 
 def read(path: str) -> str:
@@ -422,6 +425,35 @@ write(single_path, single)
 
 
 # ---------------------------------------------------------------------------
+# Release build provenance. This repairs the exact regression where build jobs
+# checked out a mutable version tag and reused indistinguishable asset names.
+# If any of the safety markers disappear, restore the last known-good release
+# pipeline. Re-running the patcher is a no-op once the pipeline is healthy.
+# ---------------------------------------------------------------------------
+release_workflow_path = ".github/workflows/sync-upstream-macos.yml"
+release_workflow = read(release_workflow_path)
+release_markers = (
+    "build_sha: ${{ steps.sync.outputs.build_sha }}",
+    "short_sha: ${{ steps.sync.outputs.short_sha }}",
+    "ref: ${{ needs.sync.outputs.build_sha }}",
+    "Verify immutable source revision",
+    'mac="fastpotify-proxy-${tag}-${short_sha}-macos-universal.dmg"',
+    'win="fastpotify-proxy-${tag}-${short_sha}-windows-x64.zip"',
+    'deb="fastpotify-proxy-${tag}-${short_sha}-linux-x64.deb"',
+    'verify_binary "$mount_dir/Fastpotify Proxy.app/Contents/MacOS/fastpotify"',
+    "Source commit: `${{ needs.sync.outputs.build_sha }}`",
+)
+release_regressed = (
+    "ref: ${{ needs.sync.outputs.tag }}" in release_workflow
+    or release_workflow.count("ref: ${{ needs.sync.outputs.build_sha }}") < 3
+    or any(marker not in release_workflow for marker in release_markers)
+)
+if release_regressed:
+    release_workflow = git_file(RELEASE_CANONICAL, release_workflow_path)
+write(release_workflow_path, release_workflow)
+
+
+# ---------------------------------------------------------------------------
 # Downstream documentation.
 # ---------------------------------------------------------------------------
 readme_path = "README.md"
@@ -476,6 +508,7 @@ required = {
     updates_path: [RELEASE_API],
     plist_path: [BUNDLE_ID, "Fastpotify Proxy"],
     single_path: [f"const INSTANCE_PORT: u16 = {INSTANCE_PORT};"],
+    release_workflow_path: list(release_markers),
     readme_path: ["## Proxy Configuration"],
     settings_doc: ["| `proxy_server` |", "| `proxy_port` |"],
     connect_doc: ["When `proxy_server` and `proxy_port` are set"],
@@ -485,5 +518,10 @@ for path, markers in required.items():
 ui = read(ui_path)
 if not (ui.index(appearance_marker) < ui.index(proxy_marker) < ui.index(winamp_marker)):
     raise SystemExit("Proxy settings are not between Appearance and Winamp skins")
+release_workflow = read(release_workflow_path)
+if "ref: ${{ needs.sync.outputs.tag }}" in release_workflow:
+    raise SystemExit("Release workflow regressed to mutable-tag checkout")
+if release_workflow.count("ref: ${{ needs.sync.outputs.build_sha }}") < 3:
+    raise SystemExit("Release workflow does not pin all platform builds to build_sha")
 
 print("Fastpotify Proxy downstream customizations are repaired and verified.")
