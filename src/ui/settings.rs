@@ -11,6 +11,7 @@ use crate::theme::{self, Icon, Palette};
 use super::widgets;
 
 const PLAYBACK_DIRTY_ID: &str = "playback-settings-dirty";
+const PROXY_RESTART_ERROR_ID: &str = "proxy-restart-error";
 pub(crate) const PERSONAL_APP_FOCUS_ID: &str = "focus-personal-app-setup";
 
 fn section(
@@ -36,6 +37,76 @@ fn section(
             add_contents(ui);
         });
     ui.add_space(8.0);
+}
+
+fn spawn_restarted_instance() -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Unable to locate Fastpotify: {error}"))?;
+    let pid = std::process::id().to_string();
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let script = "$p=[int]$env:FASTPOTIFY_RESTART_PID; Wait-Process -Id $p -ErrorAction SilentlyContinue; Start-Process -FilePath $env:FASTPOTIFY_RESTART_EXE";
+        std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", script])
+            .env("FASTPOTIFY_RESTART_PID", &pid)
+            .env("FASTPOTIFY_RESTART_EXE", &executable)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|error| format!("Unable to restart Fastpotify: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let bundle = executable
+            .parent()
+            .and_then(|path| path.parent())
+            .and_then(|path| path.parent())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("app"));
+        if let Some(bundle) = bundle {
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg("while kill -0 \"$FASTPOTIFY_RESTART_PID\" 2>/dev/null; do sleep 0.1; done; exec /usr/bin/open -n \"$FASTPOTIFY_RESTART_APP\"")
+                .env("FASTPOTIFY_RESTART_PID", &pid)
+                .env("FASTPOTIFY_RESTART_APP", bundle)
+                .spawn()
+                .map_err(|error| format!("Unable to restart Fastpotify: {error}"))?;
+        } else {
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg("while kill -0 \"$FASTPOTIFY_RESTART_PID\" 2>/dev/null; do sleep 0.1; done; exec \"$FASTPOTIFY_RESTART_EXE\"")
+                .env("FASTPOTIFY_RESTART_PID", &pid)
+                .env("FASTPOTIFY_RESTART_EXE", &executable)
+                .spawn()
+                .map_err(|error| format!("Unable to restart Fastpotify: {error}"))?;
+        }
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("while kill -0 \"$FASTPOTIFY_RESTART_PID\" 2>/dev/null; do sleep 0.1; done; exec \"$FASTPOTIFY_RESTART_EXE\"")
+            .env("FASTPOTIFY_RESTART_PID", &pid)
+            .env("FASTPOTIFY_RESTART_EXE", &executable)
+            .spawn()
+            .map_err(|error| format!("Unable to restart Fastpotify: {error}"))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("Restart is not supported on this platform".into())
+}
+
+fn restart_fastpotify(app: &mut App) -> Result<(), String> {
+    app.settings.save(&app.dirs.settings_file());
+    spawn_restarted_instance()?;
+    app.actions.push(Action::Quit);
+    Ok(())
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
@@ -429,7 +500,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             "Audio cache",
             "Save downloaded audio for later playback.",
             |ui| {
-                // The control area lays out right-to-left: add the rightmost item first.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if widgets::switch(ui, &palette, "Audio cache", &mut app.settings.audio_cache)
@@ -476,6 +546,121 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 theme::subtle(ui, &palette, "Playback settings applied.");
             }
         });
+    });
+
+    section(ui, &palette, "Proxy", |ui| {
+        let restart_error_id = egui::Id::new(PROXY_RESTART_ERROR_ID);
+        let mut proxy_server = app.settings.proxy_server.clone().unwrap_or_default();
+        widgets::setting_row(
+            ui,
+            &palette,
+            "HTTP proxy server",
+            "Hostname or IP address only. Do not include http:// or the port.",
+            |ui| {
+                let response = Frame::new()
+                    .fill(palette.surface)
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut proxy_server)
+                                .id(egui::Id::new("proxy-server"))
+                                .hint_text(egui::RichText::new("127.0.0.1").color(palette.dim))
+                                .font(theme::regular(13.0))
+                                .frame(egui::Frame::NONE)
+                                .desired_width(180.0),
+                        )
+                    })
+                    .inner;
+                if response.changed() {
+                    let trimmed = proxy_server.trim().to_string();
+                    app.settings.proxy_server = (!trimmed.is_empty()).then_some(trimmed);
+                    ui.data_mut(|data| {
+                        data.remove_temp::<String>(restart_error_id);
+                    });
+                    changed = true;
+                }
+            },
+        );
+
+        let mut proxy_port = app
+            .settings
+            .proxy_port
+            .map(|port| port.to_string())
+            .unwrap_or_default();
+        widgets::setting_row(
+            ui,
+            &palette,
+            "HTTP proxy port",
+            "Set together with the proxy server.",
+            |ui| {
+                let response = Frame::new()
+                    .fill(palette.surface)
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut proxy_port)
+                                .id(egui::Id::new("proxy-port"))
+                                .hint_text(egui::RichText::new("7897").color(palette.dim))
+                                .font(theme::regular(13.0))
+                                .frame(egui::Frame::NONE)
+                                .desired_width(90.0)
+                                .char_limit(5),
+                        )
+                    })
+                    .inner;
+                if response.changed() {
+                    let trimmed = proxy_port.trim();
+                    if trimmed.is_empty() {
+                        app.settings.proxy_port = None;
+                        changed = true;
+                    } else if let Ok(port) = trimmed.parse::<u16>()
+                        && port != 0
+                    {
+                        app.settings.proxy_port = Some(port);
+                        changed = true;
+                    }
+                    ui.data_mut(|data| {
+                        data.remove_temp::<String>(restart_error_id);
+                    });
+                }
+            },
+        );
+
+        let proxy_status = app.settings.proxy_url();
+        let configured = app.settings.proxy_server.is_some() || app.settings.proxy_port.is_some();
+        let status = match &proxy_status {
+            Ok(Some(url)) => format!("Configured as {url}. Restart Fastpotify to apply changes."),
+            Ok(None) => "Direct connection. Set both fields to enable the HTTP proxy.".to_string(),
+            Err(error) => format!("Invalid proxy configuration: {error}."),
+        };
+        widgets::setting_row(ui, &palette, "Proxy status", &status, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if configured
+                    && theme::soft_button(ui, &palette, None, "Clear", false).clicked()
+                {
+                    app.settings.proxy_server = None;
+                    app.settings.proxy_port = None;
+                    changed = true;
+                }
+                let restart = ui
+                    .add_enabled_ui(proxy_status.is_ok(), |ui| {
+                        theme::pill_button(ui, &palette, "Restart Fastpotify", true)
+                    })
+                    .inner;
+                if restart.clicked() {
+                    if let Err(error) = restart_fastpotify(app) {
+                        log::error!("{error}");
+                        ui.data_mut(|data| data.insert_temp(restart_error_id, error));
+                    }
+                }
+            });
+        });
+        if let Some(error) = ui.data(|data| data.get_temp::<String>(restart_error_id)) {
+            theme::subtle(ui, &palette, &error);
+        }
     });
 
     section(ui, &palette, "Appearance", |ui| {
@@ -753,8 +938,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ),
             |_ui| {},
         );
-        // Three buttons are wider than a row's control slot; they get a
-        // line of their own under the words.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             for (index, pack) in crate::milkdrop::PACKS.iter().enumerate() {
@@ -806,8 +989,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             },
             |ui| {
                 let fps = app.settings.milkdrop_fps;
-                // The dial stops at the rates worth having and passes
-                // through nothing in between, the way a gear lever does.
                 let stops = crate::milkdrop::fps_stops(screen_hz, fps);
                 let last = stops.len().saturating_sub(1);
                 let mut at = stops.iter().position(|rate| *rate == fps).unwrap_or(1);
@@ -826,8 +1007,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             .unwrap_or_default()
                     })
                     .custom_parser(move |text| {
-                        // A rate typed in lands on the nearest stop, since
-                        // the stops are all this dial can hold.
                         let text = text.trim().to_lowercase();
                         if text.starts_with("un") {
                             return Some(typed.len().saturating_sub(1) as f64);
@@ -1026,9 +1205,6 @@ fn hertz(hz: f32) -> String {
     }
 }
 
-/// One vertical slider in the app's own style: the track filled from
-/// 0 dB, the handle in the middle when flat, a double-click to put it
-/// back there. Returns whether it moved.
 fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, on: bool) -> bool {
     use egui::{Rect, Stroke, pos2, vec2};
     let range = crate::eq::RANGE_DB;
@@ -1085,8 +1261,6 @@ fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32,
     .inner
 }
 
-/// The equalizer's response over the audible range, the bands marked on
-/// it: the shape says what a row of numbers cannot.
 fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettings) {
     use egui::{Shape, Stroke, pos2, vec2};
     let width = ui.available_width().min(720.0);
