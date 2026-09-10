@@ -1,18 +1,1 @@
-[package]
-name = "fastpotify"
-version = "0.7.1"
-edition = "2024"
-rust-version = "1.95"
-license = "MIT"
-description = "A native Spotify client"
-repository = "https://github.com/crmne/fastpotify"
-keywords = ["spotify", "music", "egui", "librespot", "player"]
-categories = ["multimedia::audio"]
-
-[lib]
-name = "fastpotify"
-path = "src/lib.rs"
-
-[[bin]]
-name = "fastpotify"
-path = "src/main.rs"
+TEMP
