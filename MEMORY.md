@@ -19,3 +19,4 @@
 - 2026-09-07: macOS Actions must explicitly add both Rust targets after toolchain setup because the repository-pinned toolchain, not only the action's requested toolchain, needs the target standard libraries.
 - 2026-09-07: Any Cargo dependency change must refresh the fixed-output `fetchCargoVendor` hash in `flake.nix`.
 - 2026-09-10: Upstream removed the downstream sync workflow and now edits many overlay files. The sync workflow is kept locally, merges with `-X ours`, and reapplies the downstream repository URLs after each merge. Update checks and Source code therefore target `OthinusG/fastpotify-proxy_ver`.
+- 2026-09-21: Upstream officially implemented native proxy support (HTTP & SOCKS5, credential storage, UI controls) in v0.8.0 (commit a50347b, PR #250) and renamed the project to Spotifast. The downstream proxy fork is deprecated and archived; automated sync workflows are disabled.

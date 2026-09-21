@@ -1,5 +1,11 @@
-# Fastpotify
-## Proxy Configuration
+# Fastpotify (Archived)
+
+> [!WARNING]
+> **This repository is archived and no longer maintained.**
+> Upstream has officially implemented native proxy support (HTTP & SOCKS5 with credential storage and UI controls) in v0.8.0+ and renamed the project to [Spotifast](https://github.com/crmne/fastpotify).
+> Please use the upstream repository directly: [crmne/fastpotify](https://github.com/crmne/fastpotify).
+
+## Historical Proxy Configuration (v0.7.1)
 
 Edit `settings.json`
 Configuration file locations:
